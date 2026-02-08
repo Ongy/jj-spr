@@ -495,7 +495,6 @@ impl Jujutsu {
             .status()?;
 
         Ok(())
-
     }
 
     pub fn run_git_fetch(&self) -> Result<()> {
