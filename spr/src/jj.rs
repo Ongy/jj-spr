@@ -18,7 +18,33 @@ use crate::{
 };
 use git2::Oid;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeId {
+    id: String,
+}
+
+impl AsRef<str> for ChangeId {
+    fn as_ref(&self) -> &str {
+        return self.id.as_ref();
+    }
+}
+
+impl ChangeId {
+    pub fn from_str(id: String) -> Self {
+        ChangeId { id }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Revision {
+    pub id: ChangeId,
+    pub parent_ids: Vec<ChangeId>,
+    pub pull_request_number: Option<u64>,
+    pub title: String,
+    pub message: MessageSectionsMap,
+}
+
+#[derive(Debug, Clone)]
 pub struct PreparedCommit {
     pub oid: Oid,
     pub short_id: String,
@@ -35,6 +61,50 @@ pub struct Jujutsu {
 }
 
 impl Jujutsu {
+    pub fn read_revision(&self, config: &Config, id: ChangeId) -> Result<Revision> {
+        let output = self.run_captured_with_args([
+            "log",
+            "--no-graph",
+            "-r",
+            id.id.as_str(),
+            "--template",
+            "parents.map(|c| c.change_id()).join( \",\") ++ \"\\n\" ++ description",
+        ])?;
+
+        let mut parent_ids = Vec::new();
+        let (parents, description) = if let Some((parents, description)) = output.split_once("\n") {
+            (parents, description)
+        } else {
+            (output.as_str(), "")
+        };
+
+        for segment in parents.split(|c| c == ',') {
+            if !segment.is_empty() {
+                let parent_id = ChangeId::from_str(String::from(segment));
+                parent_ids.push(parent_id)
+            }
+        }
+
+        let message = parse_message(&description, MessageSection::Title);
+        let pull_request_number = message
+            .get(&MessageSection::PullRequest)
+            .and_then(|url| config.parse_pull_request_field(url));
+        let title = String::from(
+            message
+                .get(&MessageSection::Title)
+                .map(|t| &t[..])
+                .unwrap_or(""),
+        );
+
+        Ok(Revision {
+            id,
+            parent_ids,
+            pull_request_number,
+            title,
+            message,
+        })
+    }
+
     pub fn new(git_repo: git2::Repository) -> Result<Self> {
         let repo_path = git_repo
             .workdir()
@@ -73,6 +143,52 @@ impl Jujutsu {
         let master_oid = self.resolve_revision_to_commit_id(config.master_ref.local())?;
         let merge_base = self.git_repo.merge_base(commit_oid, master_oid)?;
         Ok(merge_base)
+    }
+
+    pub fn read_revision_range(&self, config: &Config, range: &str) -> Result<Vec<Revision>> {
+        // Get commit range using jj
+        let output = self.run_captured_with_args([
+            "log",
+            "--no-graph",
+            "-r",
+            range,
+            "--template",
+            "change_id ++ \"\\n\"",
+        ])?;
+
+        let mut commits = Vec::new();
+        for line in output.lines() {
+            let line = line.trim();
+            if !line.is_empty() {
+                let change_id = ChangeId::from_str(String::from(line));
+                commits.push(self.read_revision(config, change_id)?);
+            }
+        }
+
+        commits.reverse();
+
+        Ok(commits)
+    }
+
+    pub fn update_revision_message(&self, rev: &Revision) -> Result<()> {
+        let new_message = build_commit_message(&rev.message);
+
+        // Update the commit message using jj describe
+        let mut cmd = Command::new(&self.jj_bin);
+        cmd.args(["describe", "-r", rev.id.as_ref(), "-m", &new_message])
+            .current_dir(&self.repo_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let output = cmd.output()?;
+        if !output.status.success() {
+            return Err(Error::new(format!(
+                "Failed to update commit message: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(())
     }
 
     pub fn get_prepared_commits_from_to(
@@ -192,15 +308,6 @@ impl Jujutsu {
     pub fn cherrypick(&self, commit_oid: Oid, onto_oid: Oid) -> Result<git2::Index> {
         let commit = self.git_repo.find_commit(commit_oid)?;
         let onto_commit = self.git_repo.find_commit(onto_oid)?;
-        let _commit_tree = commit.tree()?;
-        let _onto_tree = onto_commit.tree()?;
-        let _base_tree = if commit.parents().count() > 0 {
-            commit.parent(0)?.tree()?
-        } else {
-            // For initial commit, use empty tree
-            let empty_tree_oid = self.git_repo.treebuilder(None)?.write()?;
-            self.git_repo.find_tree(empty_tree_oid)?
-        };
 
         let index = self.git_repo.cherrypick_commit(
             &commit,
@@ -282,7 +389,7 @@ impl Jujutsu {
         })
     }
 
-    fn resolve_revision_to_commit_id(&self, revision: &str) -> Result<Oid> {
+    pub fn resolve_revision_to_commit_id(&self, revision: &str) -> Result<Oid> {
         let output = self.run_captured_with_args([
             "log",
             "--no-graph",
@@ -344,6 +451,15 @@ impl Jujutsu {
                 String::from_utf8_lossy(&output.stderr)
             )))
         }
+    }
+
+    pub fn run_git_fetch(&self) -> Result<()> {
+        std::process::Command::new("jj")
+            .args(["git", "fetch"])
+            .current_dir(self.repo_path.as_path())
+            .status()?;
+
+        Ok(())
     }
 }
 
@@ -432,6 +548,60 @@ mod tests {
             .to_string()
     }
 
+    fn create_jujutsu_commit_from(
+        repo_path: &Path,
+        message: &str,
+        file_content: &str,
+        parents: &[&str],
+    ) -> String {
+        let mut args = Vec::new();
+        args.push("new");
+        args.extend_from_slice(parents);
+        // Create new revision to commit later
+        let output = std::process::Command::new("jj")
+            .args(args)
+            .current_dir(repo_path)
+            .output()
+            .expect("Failed to run jj new");
+
+        if !output.status.success() {
+            panic!(
+                "Failed to prepare revision: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        // Create a file
+        let file_path = repo_path.join("test.txt");
+        fs::write(&file_path, file_content).expect("Failed to write test file");
+
+        // Create a commit using jj
+        let output = std::process::Command::new("jj")
+            .args(["commit", "-m", message])
+            .current_dir(repo_path)
+            .output()
+            .expect("Failed to run jj commit");
+
+        if !output.status.success() {
+            panic!(
+                "Failed to create jj commit: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        // Get the change ID of the created commit
+        let output = std::process::Command::new("jj")
+            .args(["log", "--no-graph", "-r", "@-", "--template", "change_id"])
+            .current_dir(repo_path)
+            .output()
+            .expect("Failed to get change ID");
+
+        String::from_utf8(output.stdout)
+            .expect("Invalid UTF-8 in jj output")
+            .trim()
+            .to_string()
+    }
+
     #[test]
     fn test_jujutsu_creation() {
         let (_temp_dir, repo_path) = create_jujutsu_test_repo();
@@ -440,6 +610,41 @@ mod tests {
         let jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
         assert!(jj.repo_path.exists());
         assert!(jj.repo_path.join(".jj").exists());
+    }
+
+    #[test]
+    fn test_revision_reading() {
+        let config = create_test_config();
+        let (_temp_dir, repo_path) = create_jujutsu_test_repo();
+
+        // Create some commits
+        let _commit1 = create_jujutsu_commit(&repo_path, "First commit", "content1");
+        let commit2 = create_jujutsu_commit(&repo_path, "Second commit", "content2");
+        let commit3 = create_jujutsu_commit(&repo_path, "Third commit", "content3");
+
+        let commit4 = create_jujutsu_commit_from(
+            &repo_path,
+            "Fourth commit",
+            "content4",
+            &[commit2.as_str(), commit3.as_str()],
+        );
+
+        let git_repo = git2::Repository::open(&repo_path).expect("Failed to open git repository");
+        let jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
+
+        let c1 = jj.read_revision(&config, ChangeId::from_str(commit2));
+        assert!(c1.is_ok(), "Failed to read @ revision: {:?}", c1.err());
+        assert!(
+            c1.unwrap().parent_ids.len() == 1,
+            "Got more than one parent of c1",
+        );
+
+        let c2 = jj.read_revision(&config, ChangeId::from_str(commit4));
+        assert!(c2.is_ok(), "Failed to read @ revision: {:?}", c2.err());
+        assert!(
+            c2.unwrap().parent_ids.len() == 2,
+            "Got parent count != 2 from c2",
+        );
     }
 
     #[test]

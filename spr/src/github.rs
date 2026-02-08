@@ -5,14 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use git2::Oid;
 use graphql_client::{GraphQLQuery, Response};
+use octocrab::models::IssueState;
 use serde::Deserialize;
 
 use crate::{
     error::{Error, Result, ResultExt},
     message::{MessageSection, MessageSectionsMap, build_github_body, parse_message},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Clone)]
 pub struct GitHub {
@@ -70,6 +72,49 @@ impl PullRequestUpdate {
         if pull_request.body.as_ref() != Some(&body) {
             self.body = Some(body);
         }
+    }
+}
+
+impl From<octocrab::models::pulls::PullRequest> for PullRequest {
+    fn from(octo_request: octocrab::models::pulls::PullRequest) -> Self {
+        let merge_commit = match octo_request.merge_commit_sha {
+            None => None,
+            Some(sha) => match Oid::from_str(sha.as_str()) {
+                Ok(oid) => Some(oid),
+                Err(_) => None,
+            },
+        };
+        return PullRequest {
+            number: octo_request.number,
+            state: octo_request
+                .state
+                .map(|s| match s {
+                    IssueState::Open => PullRequestState::Open,
+                    IssueState::Closed => PullRequestState::Closed,
+                    _ => PullRequestState::Open,
+                })
+                .unwrap_or(PullRequestState::Open),
+
+            title: octo_request.title.unwrap_or("".into()),
+            body: octo_request.body,
+            sections: BTreeMap::new(),
+            base: GitHubBranch::new_from_branch_name(
+                octo_request.base.ref_field.as_str(),
+                "origin",
+                "main",
+            ),
+            head: GitHubBranch::new_from_branch_name(
+                octo_request.head.ref_field.as_str(),
+                "origin",
+                "main",
+            ),
+            // We trust these to be git OIDs
+            base_oid: Oid::from_str(octo_request.base.sha.as_str()).unwrap(),
+            head_oid: Oid::from_str(octo_request.head.sha.as_str()).unwrap(),
+            merge_commit: merge_commit,
+            reviewers: HashMap::new(),
+            review_status: None,
+        };
     }
 }
 
@@ -350,8 +395,8 @@ impl GitHub {
         base_ref_name: String,
         head_ref_name: String,
         draft: bool,
-    ) -> Result<u64> {
-        let number = octocrab::instance()
+    ) -> Result<PullRequest> {
+        let octo_pr = octocrab::instance()
             .pulls(self.config.owner.clone(), self.config.repo.clone())
             .create(
                 message
@@ -363,10 +408,9 @@ impl GitHub {
             .body(build_github_body(message))
             .draft(Some(draft))
             .send()
-            .await?
-            .number;
+            .await?;
 
-        Ok(number)
+        Ok(PullRequest::from(octo_pr))
     }
 
     pub async fn update_pull_request(&self, number: u64, updates: PullRequestUpdate) -> Result<()> {
