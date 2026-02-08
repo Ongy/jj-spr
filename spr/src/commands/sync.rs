@@ -2,6 +2,12 @@ use std::iter::zip;
 
 use crate::{error::Result, github::PullRequestState, jj::ChangeId};
 
+#[derive(Debug, clap::Parser)]
+pub struct SyncOpts {
+    #[clap(long, short = 'r')]
+    revset: Option<String>,
+}
+
 async fn collect_futures<J, I: IntoIterator<Item = tokio::task::JoinHandle<J>>>(
     it: I,
 ) -> Result<Vec<J>> {
@@ -17,11 +23,15 @@ pub async fn sync(
     jj: &crate::jj::Jujutsu,
     gh: &mut crate::github::GitHub,
     config: &crate::config::Config,
+    opts: SyncOpts,
 ) -> Result<()> {
     jj.run_git_fetch()?;
 
     // We are interested in all revisions that have PRs
-    let revisions = jj.read_revision_range(config, "description(glob:\"*Pull Request:*\") ~ immutable()")?;
+    let revisions = jj.read_revision_range(
+        config,
+        "description(glob:\"*Pull Request:*\") ~ immutable()",
+    )?;
 
     let pull_requests: Result<Vec<_>> =
         collect_futures(revisions.iter().map(|r: &crate::jj::Revision| {
@@ -50,7 +60,10 @@ pub async fn sync(
             jj.abandon(rev.id)?;
         }
     }
-    jj.rebase_branch("@", ChangeId::from_str("trunk()".into()))?;
+    jj.rebase_branch(
+        opts.revset.unwrap_or("@".into()),
+        ChangeId::from_str("trunk()".into()),
+    )?;
 
     Ok(())
 }
