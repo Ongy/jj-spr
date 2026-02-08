@@ -82,7 +82,7 @@ pub async fn amend(
                     format!(
                         "commit_id({})..remote_bookmarks({}, {})",
                         old_rev,
-                        pull_request.head.local(),
+                        pull_request.head.branch_name(),
                         config.remote_name
                     )
                     .as_str(),
