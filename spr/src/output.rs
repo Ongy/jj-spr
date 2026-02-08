@@ -7,7 +7,7 @@
 
 use crate::{error::Result, jj::PreparedCommit, message::MessageSection};
 
-pub fn output(icon: &str, text: &str) -> Result<()> {
+pub fn output<S: AsRef<str>>(icon: &str, text: S) -> Result<()> {
     let term = console::Term::stdout();
 
     let bullet = format!("  {}  ", icon);
@@ -20,7 +20,7 @@ pub fn output(icon: &str, text: &str) -> Result<()> {
         .word_separator(textwrap::WordSeparator::AsciiSpace)
         .word_splitter(textwrap::WordSplitter::NoHyphenation);
 
-    term.write_line(&textwrap::wrap(text.trim(), &options).join("\n"))?;
+    term.write_line(&textwrap::wrap(text.as_ref().trim(), &options).join("\n"))?;
     Ok(())
 }
 

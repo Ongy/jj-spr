@@ -622,7 +622,7 @@ async fn diff_impl(
                 pull_request_branch.branch_name().to_string(),
                 opts.draft,
             )
-            .await?;
+            .await?.number;
 
         let pull_request_url = config.pull_request_url(pull_request_number);
 
