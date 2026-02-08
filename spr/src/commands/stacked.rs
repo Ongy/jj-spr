@@ -11,7 +11,7 @@ use std::{io::ErrorKind, iter::zip};
 async fn do_stacked<H: AsRef<str>>(
     jj: &crate::jj::Jujutsu,
     config: &crate::config::Config,
-    revision: &crate::jj::Revision,
+    revision: &mut crate::jj::Revision,
     base_ref: String,
     head_branch: H,
 ) -> Result<()> {
@@ -73,6 +73,7 @@ async fn do_stacked<H: AsRef<str>>(
             err
         })?;
 
+    revision.message.insert(MessageSection::LastCommit, pr_commit.clone().to_string());
     let mut cmd = tokio::process::Command::new("git");
     cmd.arg("-C")
         .arg(jj.git_repo.path())
@@ -113,7 +114,7 @@ async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullReq
 ) -> Result<Vec<BranchAction>> {
     // ChangeID, head branch, base branch, existing pr
     let mut seen: Vec<BranchAction> = Vec::new();
-    for (revision, maybe_pr) in revisions.into_iter() {
+    for (mut revision, maybe_pr) in revisions.into_iter() {
         let head_ref: String = if let Some(ref pr) = maybe_pr {
             pr.head.branch_name().into()
         } else {
@@ -144,7 +145,7 @@ async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullReq
         do_stacked(
             jj,
             config,
-            &revision,
+            &mut revision,
             base_ref.clone().unwrap_or(trunk_oid.clone().to_string()),
             &head_ref,
         )
@@ -229,6 +230,8 @@ pub async fn stacked(
     for mut action in actions.into_iter() {
         // We don't know what to do with these yet...
         if let Some(_) = action.existing_nr {
+            // This will at least write the current commit message.
+            jj.update_revision_message(&action.revision)?;
             continue;
         }
 
