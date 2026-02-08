@@ -27,7 +27,8 @@ pub struct AmendOptions {
     #[clap(short = 'r', long)]
     revision: Option<String>,
 
-    // Whether to also merge in any code changes
+    /// Whether to also merge in any code changes. This will merge any changes done on github into the local change.
+    /// It's useful to e.g. apply change suggestions from review in the web-ui and base further work on them.
     #[clap(long)]
     pull_code_changes: bool,
 }
