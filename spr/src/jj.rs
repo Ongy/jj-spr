@@ -408,6 +408,32 @@ impl Jujutsu {
         })
     }
 
+    pub fn squash_copy(&self, revision: &str, onto: ChangeId) -> Result<()> {
+        let _ = self.run_captured_with_args([
+            "duplicate",
+            "--no-pager",
+            &revision,
+            "--destination",
+            onto.id.as_str(),
+            "--quiet",
+            "--config",
+            format!("templates.duplicate_description='''\"jj-spr-duplicate-for-{}\"'''", onto.id).as_str(),
+        ])?;
+
+        let _ = self.run_captured_with_args([
+            "squash",
+            "--no-pager",
+            "--into",
+            onto.id.as_str(),
+            "--from",
+            format!("description(\"jj-spr-duplicate-for-{}\")", onto.id).as_str(),
+            "--quiet",
+            "--use-destination-message",
+        ])?;
+
+        Ok(())
+    }
+
     fn get_change_id_for_commit(&self, commit_oid: Oid) -> Result<String> {
         // Get the change ID for a given commit OID
         let output = self.run_captured_with_args([

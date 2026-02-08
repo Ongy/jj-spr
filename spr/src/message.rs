@@ -19,6 +19,7 @@ pub enum MessageSection {
     Reviewers,
     ReviewedBy,
     PullRequest,
+    LastCommit,
 }
 
 pub fn message_section_label(section: &MessageSection) -> &'static str {
@@ -30,6 +31,7 @@ pub fn message_section_label(section: &MessageSection) -> &'static str {
         Reviewers => "Reviewers",
         ReviewedBy => "Reviewed By",
         PullRequest => "Pull Request",
+        LastCommit => "Last Commit",
     }
 }
 
@@ -43,6 +45,7 @@ pub fn message_section_by_label(label: &str) -> Option<MessageSection> {
         "reviewers" => Some(Reviewers),
         "reviewed by" => Some(ReviewedBy),
         "pull request" => Some(PullRequest),
+        "last commit" => Some(LastCommit),
         _ => None,
     }
 }
@@ -153,6 +156,7 @@ pub fn build_commit_message(section_texts: &MessageSectionsMap) -> String {
             MessageSection::Reviewers,
             MessageSection::ReviewedBy,
             MessageSection::PullRequest,
+            MessageSection::LastCommit,
         ],
     )
 }
@@ -262,12 +266,15 @@ here is
 the
 summary
 
+Last Commit: abc
+
 Reviewer:    a, b, c"#,
                 MessageSection::Title
             ),
             [
                 (MessageSection::Title, "Hello".to_string()),
                 (MessageSection::Summary, "here is\nthe\nsummary".to_string()),
+                (MessageSection::LastCommit, "abc".to_string()),
                 (MessageSection::Reviewers, "a, b, c".to_string()),
             ]
             .into()
