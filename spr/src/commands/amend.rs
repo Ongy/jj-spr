@@ -27,7 +27,7 @@ pub struct AmendOptions {
     #[clap(short = 'r', long)]
     revision: Option<String>,
 
-    // Whether to also merge in any code changes
+    /// Whether to also merge in any code changes
     #[clap(long)]
     pull_code_changes: bool,
 }
