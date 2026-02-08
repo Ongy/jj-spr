@@ -426,7 +426,7 @@ impl Jujutsu {
             "--into",
             onto.id.as_str(),
             "--from",
-            format!("description(\"jj-spr-duplicate-for-{}\")", onto.id).as_str(),
+            format!("exact:description(\"jj-spr-duplicate-for-{}\")", onto.id).as_str(),
             "--quiet",
             "--use-destination-message",
         ])?;
