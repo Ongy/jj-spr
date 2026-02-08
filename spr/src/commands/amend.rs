@@ -8,7 +8,7 @@
 use crate::{
     error::{Error, Result},
     jj::PreparedCommit,
-    message::validate_commit_message,
+    message::{MessageSection, validate_commit_message},
     output::{output, write_commit_title},
 };
 
@@ -26,6 +26,10 @@ pub struct AmendOptions {
     /// If a range is provided, behaves like --all mode. If not specified, uses '@-'.
     #[clap(short = 'r', long)]
     revision: Option<String>,
+
+    // Whether to also merge in any code changes
+    #[clap(long)]
+    pull_code_changes: bool,
 }
 
 pub async fn amend(
@@ -70,7 +74,25 @@ pub async fn amend(
         write_commit_title(commit)?;
         if let Some(pull_request) = pull_request {
             let pull_request = pull_request.await??;
-            commit.message = pull_request.sections;
+            // Ok, we want to update our local change with any code changes that were done upstream
+            if opts.pull_code_changes
+                && let Some(old_rev) = commit.message.get(&MessageSection::LastCommit)
+            {
+                jj.squash_copy(
+                    format!(
+                        "commit_id({})..remote_bookmarks({}, {})",
+                        old_rev,
+                        pull_request.head.local(),
+                        config.remote_name
+                    )
+                    .as_str(),
+                    crate::jj::ChangeId::from_str(commit.short_id.clone()),
+                )?;
+            }
+
+            for (k, v) in pull_request.sections.into_iter() {
+                commit.message.insert(k, v);
+            }
             commit.message_changed = true;
         }
         failure = validate_commit_message(&commit.message).is_err() || failure;

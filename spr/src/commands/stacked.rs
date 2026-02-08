@@ -11,7 +11,7 @@ use std::{io::ErrorKind, iter::zip};
 async fn do_stacked<H: AsRef<str>>(
     jj: &crate::jj::Jujutsu,
     config: &crate::config::Config,
-    revision: &crate::jj::Revision,
+    revision: &mut crate::jj::Revision,
     base_ref: String,
     head_branch: H,
 ) -> Result<()> {
@@ -73,6 +73,9 @@ async fn do_stacked<H: AsRef<str>>(
             err
         })?;
 
+    revision
+        .message
+        .insert(MessageSection::LastCommit, pr_commit.clone().to_string());
     let mut cmd = tokio::process::Command::new("git");
     cmd.arg("-C")
         .arg(jj.git_repo.path())
@@ -113,7 +116,7 @@ async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullReq
 ) -> Result<Vec<BranchAction>> {
     // ChangeID, head branch, base branch, existing pr
     let mut seen: Vec<BranchAction> = Vec::new();
-    for (revision, maybe_pr) in revisions.into_iter() {
+    for (mut revision, maybe_pr) in revisions.into_iter() {
         let head_ref: String = if let Some(ref pr) = maybe_pr {
             pr.head.branch_name().into()
         } else {
@@ -144,7 +147,7 @@ async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullReq
         do_stacked(
             jj,
             config,
-            &revision,
+            &mut revision,
             base_ref.clone().unwrap_or(trunk_oid.clone().to_string()),
             &head_ref,
         )
@@ -157,7 +160,9 @@ async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullReq
         seen.push(BranchAction {
             revision,
             head_branch: head_ref,
-            base_branch: base_ref.and_then(|r| r.strip_prefix("origin/").map(|s| s.into())).unwrap_or(config.master_ref.branch_name().to_string()),
+            base_branch: base_ref
+                .and_then(|r| r.strip_prefix("origin/").map(|s| s.into()))
+                .unwrap_or(config.master_ref.branch_name().to_string()),
             existing_nr: maybe_pr.map(|pr| pr.number),
         });
     }
@@ -229,10 +234,11 @@ pub async fn stacked(
     for mut action in actions.into_iter() {
         // We don't know what to do with these yet...
         if let Some(_) = action.existing_nr {
+            // This will at least write the current commit message.
+            jj.update_revision_message(&action.revision)?;
             continue;
         }
 
-        
         let pr = gh
             .create_pull_request(
                 &action.revision.message,
@@ -460,17 +466,22 @@ mod tests {
 
         let jj = crate::jj::Jujutsu::new(repo).expect("Failed to create JJ object in cloned repo");
 
-        return (temp_dir, jj, bare)
+        return (temp_dir, jj, bare);
     }
 
     #[tokio::test]
     async fn test_single_on_head() {
         let (_temp_dir, jj, bare) = setup_test_env();
         let config = create_test_config();
-        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
-        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+        let trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+        let workdir = jj
+            .git_repo
+            .workdir()
+            .expect("Got no workdir on git/jj repo");
 
-        
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
             .read_revision(&config, crate::jj::ChangeId::from_str(rev))
@@ -500,8 +511,14 @@ mod tests {
     async fn test_update_pr_on_change() {
         let (_temp_dir, jj, bare) = setup_test_env();
         let config = create_test_config();
-        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
-        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+        let trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+        let workdir = jj
+            .git_repo
+            .workdir()
+            .expect("Got no workdir on git/jj repo");
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
@@ -569,8 +586,14 @@ mod tests {
     async fn test_stack_on_existing() {
         let (_temp_dir, jj, bare) = setup_test_env();
         let config = create_test_config();
-        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
-        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+        let trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+        let workdir = jj
+            .git_repo
+            .workdir()
+            .expect("Got no workdir on git/jj repo");
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
@@ -595,32 +618,32 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
-            [(
-                change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from(""),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::new(),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "main", "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            ), (
-                child_change.clone(),
-                None
-            )],
+            [
+                (
+                    change.clone(),
+                    Some(crate::github::PullRequest {
+                        number: 1,
+                        state: crate::github::PullRequestState::Open,
+                        title: String::from(""),
+                        body: None,
+                        base_oid: git2::Oid::zero(),
+                        sections: std::collections::BTreeMap::new(),
+                        base: crate::github::GitHubBranch::new_from_branch_name(
+                            "main", "origin", "main",
+                        ),
+                        head_oid: git2::Oid::zero(),
+                        head: crate::github::GitHubBranch::new_from_branch_name(
+                            "spr/test/test-commit",
+                            "origin",
+                            "main",
+                        ),
+                        merge_commit: None,
+                        reviewers: std::collections::HashMap::new(),
+                        review_status: None,
+                    }),
+                ),
+                (child_change.clone(), None),
+            ],
             trunk_oid,
         )
         .await
@@ -653,8 +676,14 @@ mod tests {
     async fn stack_multi_in_pr() {
         let (_temp_dir, jj, bare) = setup_test_env();
         let config = create_test_config();
-        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
-        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+        let trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+        let workdir = jj
+            .git_repo
+            .workdir()
+            .expect("Got no workdir on git/jj repo");
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
@@ -668,13 +697,7 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
-            [(
-                change.clone(),
-                None,
-            ), (
-                child_change.clone(),
-                None
-            )],
+            [(change.clone(), None), (child_change.clone(), None)],
             trunk_oid,
         )
         .await
@@ -707,8 +730,14 @@ mod tests {
     async fn no_rebase_when_change_is_not_rebased() {
         let (_temp_dir, jj, bare) = setup_test_env();
         let config = create_test_config();
-        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
-        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+        let trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+        let workdir = jj
+            .git_repo
+            .workdir()
+            .expect("Got no workdir on git/jj repo");
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
@@ -783,12 +812,12 @@ mod tests {
                 == initial_pr_oid,
             "PR branch was not based on previous commit"
         );
-        let head_base = bare.merge_base(pr_oid, updated_trunk_oid)
-                .expect("Failed to get merge oid");
-        assert!(head_base != updated_trunk_oid,
-            "PR was rebased to HEAD"
-        );
-        assert!(head_base == trunk_oid,
+        let head_base = bare
+            .merge_base(pr_oid, updated_trunk_oid)
+            .expect("Failed to get merge oid");
+        assert!(head_base != updated_trunk_oid, "PR was rebased to HEAD");
+        assert!(
+            head_base == trunk_oid,
             "Pr HEAD is no longer based on the previous trunk"
         );
     }
@@ -797,8 +826,14 @@ mod tests {
     async fn rebase_to_new_base() {
         let (_temp_dir, jj, bare) = setup_test_env();
         let config = create_test_config();
-        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
-        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+        let trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+        let workdir = jj
+            .git_repo
+            .workdir()
+            .expect("Got no workdir on git/jj repo");
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
@@ -830,8 +865,11 @@ mod tests {
             .push(&["HEAD:refs/heads/main"], None)
             .expect("Failed to push new main");
 
-        rebase_jj_commit(workdir, crate::jj::ChangeId::from_str(rev), crate::jj::ChangeId::from_str(new_trunk));
-        
+        rebase_jj_commit(
+            workdir,
+            crate::jj::ChangeId::from_str(rev),
+            crate::jj::ChangeId::from_str(new_trunk),
+        );
 
         let _ = handle_revs(
             &config,
@@ -876,19 +914,24 @@ mod tests {
                 == initial_pr_oid,
             "PR branch was not based on previous commit"
         );
-        let head_base = bare.merge_base(pr_oid, updated_trunk_oid)
-                .expect("Failed to get merge oid");
-        assert!(head_base == updated_trunk_oid,
-            "PR was not rebased to HEAD"
-        );
+        let head_base = bare
+            .merge_base(pr_oid, updated_trunk_oid)
+            .expect("Failed to get merge oid");
+        assert!(head_base == updated_trunk_oid, "PR was not rebased to HEAD");
     }
 
     #[tokio::test]
     async fn rebase_stacked_pr() {
         let (_temp_dir, jj, bare) = setup_test_env();
         let config = create_test_config();
-        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
-        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+        let trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+        let workdir = jj
+            .git_repo
+            .workdir()
+            .expect("Got no workdir on git/jj repo");
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
@@ -902,13 +945,7 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
-            [(
-                change.clone(),
-                None,
-            ), (
-                child_change.clone(),
-                None,
-            )],
+            [(change.clone(), None), (child_change.clone(), None)],
             trunk_oid,
         )
         .await
@@ -926,52 +963,56 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
-            [(
-                change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from(""),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::new(),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "main", "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            ), (
-                child_change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from(""),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::new(),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-other-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            )],
+            [
+                (
+                    change.clone(),
+                    Some(crate::github::PullRequest {
+                        number: 1,
+                        state: crate::github::PullRequestState::Open,
+                        title: String::from(""),
+                        body: None,
+                        base_oid: git2::Oid::zero(),
+                        sections: std::collections::BTreeMap::new(),
+                        base: crate::github::GitHubBranch::new_from_branch_name(
+                            "main", "origin", "main",
+                        ),
+                        head_oid: git2::Oid::zero(),
+                        head: crate::github::GitHubBranch::new_from_branch_name(
+                            "spr/test/test-commit",
+                            "origin",
+                            "main",
+                        ),
+                        merge_commit: None,
+                        reviewers: std::collections::HashMap::new(),
+                        review_status: None,
+                    }),
+                ),
+                (
+                    child_change.clone(),
+                    Some(crate::github::PullRequest {
+                        number: 1,
+                        state: crate::github::PullRequestState::Open,
+                        title: String::from(""),
+                        body: None,
+                        base_oid: git2::Oid::zero(),
+                        sections: std::collections::BTreeMap::new(),
+                        base: crate::github::GitHubBranch::new_from_branch_name(
+                            "spr/test/test-commit",
+                            "origin",
+                            "main",
+                        ),
+                        head_oid: git2::Oid::zero(),
+                        head: crate::github::GitHubBranch::new_from_branch_name(
+                            "spr/test/test-other-commit",
+                            "origin",
+                            "main",
+                        ),
+                        merge_commit: None,
+                        reviewers: std::collections::HashMap::new(),
+                        review_status: None,
+                    }),
+                ),
+            ],
             trunk_oid,
         )
         .await
@@ -1011,8 +1052,14 @@ mod tests {
     async fn test_no_update_without_change() {
         let (_temp_dir, jj, bare) = setup_test_env();
         let config = create_test_config();
-        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
-        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+        let trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+        let workdir = jj
+            .git_repo
+            .workdir()
+            .expect("Got no workdir on git/jj repo");
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
