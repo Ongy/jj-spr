@@ -8,9 +8,18 @@ use crate::{
 use git2::Oid;
 use std::{io::ErrorKind, iter::zip};
 
+#[derive(Debug, clap::Parser)]
+pub struct StackedOptions {
+    /// Message to be used for commits updating existing pull requests (e.g.
+    /// 'rebase' or 'review comments')
+    #[clap(long, short = 'm')]
+    message: Option<String>,
+}
+
 async fn do_stacked<H: AsRef<str>>(
     jj: &crate::jj::Jujutsu,
     config: &crate::config::Config,
+    opts: &StackedOptions,
     revision: &mut crate::jj::Revision,
     base_ref: String,
     head_branch: H,
@@ -60,11 +69,21 @@ async fn do_stacked<H: AsRef<str>>(
         return Ok(());
     }
 
+    let message = if let Some(ref msg) = opts.message {
+        msg.clone()
+    } else {
+        dialoguer::Input::<String>::new()
+            .with_prompt("Message")
+            .with_initial_text("")
+            .allow_empty(true)
+            .interact_text()?
+    };
+
     // Create the new commit
     let pr_commit = jj
         .create_derived_commit(
             target_oid,
-            &format!("\nCreated using jj-spr",),
+            &format!("{}\n\nCreated using jj-spr", message),
             target_tree,
             parents,
         )
@@ -111,6 +130,7 @@ struct BranchAction {
 async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullRequest>)>>(
     config: &crate::config::Config,
     jj: &crate::jj::Jujutsu,
+    opts: &StackedOptions,
     revisions: I,
     trunk_oid: Oid,
 ) -> Result<Vec<BranchAction>> {
@@ -147,6 +167,7 @@ async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullReq
         do_stacked(
             jj,
             config,
+            opts,
             &mut revision,
             base_ref.clone().unwrap_or(trunk_oid.clone().to_string()),
             &head_ref,
@@ -184,6 +205,7 @@ pub async fn stacked(
     jj: &crate::jj::Jujutsu,
     gh: &mut crate::github::GitHub,
     config: &crate::config::Config,
+    opts: StackedOptions,
 ) -> Result<()> {
     // Get revisions to process
     // The pattern builds:
@@ -195,7 +217,8 @@ pub async fn stacked(
     // i.e. all revisions between the current and upstream that have descriptions.
     // This somewhat funky pattern allows us to work both in the `jj new` case where changes need to be squashed into the main revision
     // and in the `jj edit` (or `jj new` + `jj describe`) case where the current `@` is the intended PR commit.
-    let revisions = jj.read_revision_range(config, "::@ ~ (immutable() | description(exact:\"\"))")?;
+    let revisions =
+        jj.read_revision_range(config, "::@ ~ (immutable() | description(exact:\"\"))")?;
 
     // At this point we cannot deal with revisions that have multiple parents :/
     if let Some(r) = revisions.iter().find(|r| r.parent_ids.len() != 1) {
@@ -230,7 +253,7 @@ pub async fn stacked(
         .into_iter()
         .collect();
 
-    let actions = handle_revs(config, jj, zip(revisions, pull_requests?), trunk_oid).await?;
+    let actions = handle_revs(config, jj, &opts, zip(revisions, pull_requests?), trunk_oid).await?;
     for mut action in actions.into_iter() {
         // We don't know what to do with these yet...
         if let Some(_) = action.existing_nr {
@@ -486,9 +509,17 @@ mod tests {
         let change = jj
             .read_revision(&config, crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
-        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
-            .await
-            .expect("Expected to get branch name");
+        let _ = handle_revs(
+            &config,
+            &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
+            [(change.clone(), None)],
+            trunk_oid,
+        )
+        .await
+        .expect("Expected to get branch name");
 
         // Validate the initial push looks good
         let pr_branch = bare
@@ -524,9 +555,17 @@ mod tests {
         let change = jj
             .read_revision(&config, crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
-        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
-            .await
-            .expect("Expected to get branch name");
+        let _ = handle_revs(
+            &config,
+            &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
+            [(change.clone(), None)],
+            trunk_oid,
+        )
+        .await
+        .expect("Expected to get branch name");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -540,6 +579,9 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
             [(
                 change.clone(),
                 Some(crate::github::PullRequest {
@@ -599,9 +641,17 @@ mod tests {
         let change = jj
             .read_revision(&config, crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
-        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
-            .await
-            .expect("Expected to get branch name");
+        let _ = handle_revs(
+            &config,
+            &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
+            [(change.clone(), None)],
+            trunk_oid,
+        )
+        .await
+        .expect("Expected to get branch name");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -618,6 +668,9 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
             [
                 (
                     change.clone(),
@@ -697,6 +750,9 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
             [(change.clone(), None), (child_change.clone(), None)],
             trunk_oid,
         )
@@ -743,9 +799,17 @@ mod tests {
         let change = jj
             .read_revision(&config, crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
-        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
-            .await
-            .expect("Expected to get branch name");
+        let _ = handle_revs(
+            &config,
+            &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
+            [(change.clone(), None)],
+            trunk_oid,
+        )
+        .await
+        .expect("Expected to get branch name");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -772,6 +836,9 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
             [(
                 change.clone(),
                 Some(crate::github::PullRequest {
@@ -839,9 +906,17 @@ mod tests {
         let change = jj
             .read_revision(&config, crate::jj::ChangeId::from_str(rev.clone()))
             .expect("Failed to read revision");
-        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
-            .await
-            .expect("Expected to get branch name");
+        let _ = handle_revs(
+            &config,
+            &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
+            [(change.clone(), None)],
+            trunk_oid,
+        )
+        .await
+        .expect("Expected to get branch name");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -874,6 +949,9 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
             [(
                 change.clone(),
                 Some(crate::github::PullRequest {
@@ -945,6 +1023,9 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
             [(change.clone(), None), (child_change.clone(), None)],
             trunk_oid,
         )
@@ -963,6 +1044,9 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
             [
                 (
                     change.clone(),
@@ -1065,9 +1149,17 @@ mod tests {
         let change = jj
             .read_revision(&config, crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
-        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
-            .await
-            .expect("Expected to get branch name");
+        let _ = handle_revs(
+            &config,
+            &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
+            [(change.clone(), None)],
+            trunk_oid,
+        )
+        .await
+        .expect("Expected to get branch name");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -1079,6 +1171,9 @@ mod tests {
         let _ = handle_revs(
             &config,
             &jj,
+            &super::StackedOptions {
+                message: Some("".into()),
+            },
             [(
                 change.clone(),
                 Some(crate::github::PullRequest {
