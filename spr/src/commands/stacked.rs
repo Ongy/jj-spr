@@ -195,7 +195,7 @@ pub async fn stacked(
     // i.e. all revisions between the current and upstream that have descriptions.
     // This somewhat funky pattern allows us to work both in the `jj new` case where changes need to be squashed into the main revision
     // and in the `jj edit` (or `jj new` + `jj describe`) case where the current `@` is the intended PR commit.
-    let revisions = jj.read_revision_range(config, "::@ ~ (immutable() | description(\"\"))")?;
+    let revisions = jj.read_revision_range(config, "::@ ~ (immutable() | description(exact:\"\"))")?;
 
     // At this point we cannot deal with revisions that have multiple parents :/
     if let Some(r) = revisions.iter().find(|r| r.parent_ids.len() != 1) {
