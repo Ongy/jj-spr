@@ -54,6 +54,9 @@ enum Commands {
     /// Create a new or update an existing Pull Request on GitHub
     Stacked,
 
+    /// Pull state from github and merge into local pull requests
+    Sync,
+
     /// Create a new or update an existing Pull Request on GitHub from the
     /// current HEAD commit
     Diff(commands::diff::DiffOptions),
@@ -200,6 +203,7 @@ pub async fn spr() -> Result<()> {
         Commands::Patch(opts) => commands::patch::patch(opts, &jj, &mut gh, &config).await?,
         Commands::Close(opts) => commands::close::close(opts, &jj, &mut gh, &config).await?,
         Commands::Stacked => commands::stacked::stacked(&jj, &mut gh, &config).await?,
+        Commands::Sync => commands::sync::sync(&jj, &mut gh, &config).await?,
         // The following commands are executed above and return from this
         // function before it reaches this match.
         Commands::Init | Commands::Format(_) => (),
