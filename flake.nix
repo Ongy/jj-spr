@@ -84,6 +84,7 @@
 
                 # Required for sensible bash in vscode :(
                 bashInteractive
+                rust-analyzer
               ];
 
               meta = with pkgs.lib; {
