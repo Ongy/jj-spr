@@ -72,12 +72,18 @@
               buildInputs = with pkgs; [
                 openssl
                 zlib
+
+                # Required for sensible bash in vscode :(
+                bashInteractive
               ];
 
               nativeBuildInputs = with pkgs; [
                 pkg-config
                 git
                 jujutsu
+
+                # Required for sensible bash in vscode :(
+                bashInteractive
               ];
 
               meta = with pkgs.lib; {
@@ -103,33 +109,6 @@
             };
             projectRootFile = ".git/config";
             flakeCheck = false; # Covered by git-hooks check
-          };
-
-          devShells.default = pkgs.mkShell {
-            packages = with pkgs; [
-              # Rust toolchain
-              (rustToolchain.withComponents [
-                "cargo"
-                "clippy"
-                "rust-src"
-                "rustc"
-                "rustfmt"
-                "rust-analyzer"
-              ])
-
-              # Build dependencies
-              openssl
-              pkg-config
-              zlib
-
-              # Required runtime dependencies for development and testing
-              git
-              jujutsu
-            ];
-
-            # Environment variables for development
-            RUST_SRC_PATH = "${rustToolchain.rust-src}/lib/rustlib/src/rust/library";
-            PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig:${pkgs.zlib.dev}/lib/pkgconfig";
           };
         };
     };
