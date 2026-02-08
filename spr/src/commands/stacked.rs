@@ -126,7 +126,11 @@ async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullReq
             config.get_new_branch_name(&jj.get_all_ref_names()?, title)
         };
         let base_ref = if let Some(ref pr) = maybe_pr {
-            Some(pr.base.local().into())
+            if pr.base.is_master_branch() {
+                Some(trunk_oid.to_string())
+            } else {
+                Some(pr.base.local().into())
+            }
         } else if let Some(ba) = seen
             .iter()
             .find(|ba| ba.revision.id == revision.parent_ids[0])
@@ -263,6 +267,8 @@ mod tests {
     use std::fs::{self, create_dir};
     use tempfile::TempDir;
 
+    use crate::jj::ChangeId;
+
     use super::handle_revs;
 
     #[allow(dead_code)]
@@ -378,6 +384,36 @@ mod tests {
         }
     }
 
+    fn rebase_jj_commit(repo_path: &std::path::Path, src: ChangeId, dst: ChangeId) {
+        let output = std::process::Command::new("jj")
+            .args(["rebase", "-s", src.as_ref(), "-d", dst.as_ref()])
+            .current_dir(repo_path)
+            .output()
+            .expect("Failed to run jj rebase");
+
+        if !output.status.success() {
+            panic!(
+                "Failed to create jj rebase: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    fn new_on_jj_commit(repo_path: &std::path::Path, base: ChangeId) {
+        let output = std::process::Command::new("jj")
+            .args(["new", base.as_ref()])
+            .current_dir(repo_path)
+            .output()
+            .expect("Failed to run jj new");
+
+        if !output.status.success() {
+            panic!(
+                "Failed to create jj new: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
     fn create_jujutsu_commit(
         repo_path: &std::path::Path,
         message: &str,
@@ -414,20 +450,28 @@ mod tests {
             .to_string()
     }
 
-    #[tokio::test]
-    async fn test_from_head_stacked() {
+    fn setup_test_env() -> (TempDir, crate::jj::Jujutsu, git2::Repository) {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let bare_path = temp_dir.path().join("bare");
         let repo_path = temp_dir.path().join("clone");
 
         let bare = create_test_git_repo(bare_path.clone());
         let repo = clone_repo(bare_path.clone(), repo_path.clone());
-        let trunk_oid = repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
 
         let jj = crate::jj::Jujutsu::new(repo).expect("Failed to create JJ object in cloned repo");
-        let config = create_test_config();
 
-        let rev = create_jujutsu_commit(repo_path.as_path(), "Test commit", "file 1");
+        return (temp_dir, jj, bare)
+    }
+
+    #[tokio::test]
+    async fn test_single_on_head() {
+        let (_temp_dir, jj, bare) = setup_test_env();
+        let config = create_test_config();
+        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
+        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+
+        
+        let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
             .read_revision(&config, crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
@@ -436,25 +480,46 @@ mod tests {
             .expect("Expected to get branch name");
 
         // Validate the initial push looks good
-        let mut initial_pr_oid = {
-            let pr_branch = bare
-                .find_branch("spr/test/test-commit", git2::BranchType::Local)
-                .expect("Expected to find branch on bare upstream");
-            let pr_oid = pr_branch
-                .get()
-                .target()
-                .expect("Failed to get oid from pr branch");
-            assert!(
-                bare.merge_base(pr_oid, trunk_oid)
-                    .expect("Failed to get merge oid")
-                    == trunk_oid,
-                "PR branch was not based on trunk"
-            );
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+        assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
+        assert!(
+            bare.merge_base(pr_oid, trunk_oid)
+                .expect("Failed to get merge oid")
+                == trunk_oid,
+            "PR branch was not based on trunk"
+        );
+    }
 
-            pr_branch.get().target().expect("pr branch didn't have oid")
-        };
+    #[tokio::test]
+    async fn test_update_pr_on_change() {
+        let (_temp_dir, jj, bare) = setup_test_env();
+        let config = create_test_config();
+        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
+        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
 
-        amend_jujutsu_revision(repo_path.as_path(), "file 2");
+        let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
+        let change = jj
+            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .expect("Failed to read revision");
+        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
+            .await
+            .expect("Expected to get branch name");
+
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let initial_pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+
+        amend_jujutsu_revision(workdir, "file 2");
         let _ = handle_revs(
             &config,
             &jj,
@@ -485,24 +550,45 @@ mod tests {
         )
         .await
         .expect("Expected to get branch name");
-        initial_pr_oid = {
-            let pr_branch = bare
-                .find_branch("spr/test/test-commit", git2::BranchType::Local)
-                .expect("Expected to find branch on bare upstream");
-            let pr_oid = pr_branch
-                .get()
-                .target()
-                .expect("Failed to get oid from pr branch");
-            assert!(
-                bare.merge_base(pr_oid, initial_pr_oid)
-                    .expect("Failed to get merge oid")
-                    == initial_pr_oid,
-                "PR branch was not based on previous commit"
-            );
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+        assert!(
+            bare.merge_base(pr_oid, initial_pr_oid)
+                .expect("Failed to get merge oid")
+                == initial_pr_oid,
+            "PR branch was not based on previous commit"
+        );
+    }
 
-            pr_branch.get().target().expect("pr branch didn't have oid")
-        };
-        let child_rev = create_jujutsu_commit(repo_path.as_path(), "Test other commit", "file other");
+    #[tokio::test]
+    async fn test_stack_on_existing() {
+        let (_temp_dir, jj, bare) = setup_test_env();
+        let config = create_test_config();
+        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
+        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+
+        let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
+        let change = jj
+            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .expect("Failed to read revision");
+        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
+            .await
+            .expect("Expected to get branch name");
+
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let initial_pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+
+        let child_rev = create_jujutsu_commit(workdir, "Test other commit", "file other");
         let child_change = jj
             .read_revision(&config, crate::jj::ChangeId::from_str(child_rev))
             .expect("Failed to read child revision");
@@ -539,36 +625,111 @@ mod tests {
         )
         .await
         .expect("Expected to get branch name");
-        {
-            let pr_branch = bare
-                .find_branch("spr/test/test-commit", git2::BranchType::Local)
-                .expect("Expected to find branch on bare upstream");
-            let pr_oid = pr_branch
-                .get()
-                .target()
-                .expect("Failed to get oid from pr branch");
-            assert_eq!(pr_oid, initial_pr_oid, "PR was changed while pushing child");
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+        assert_eq!(pr_oid, initial_pr_oid, "PR was changed while pushing child");
 
-            let child_pr_branch = bare
-                .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
-                .expect("Expected to find other branch on bare upstream");
-            let child_pr_oid = child_pr_branch
-                .get()
-                .target()
-                .expect("Failed to get other oid from pr branch");
-            assert!(
-                bare.merge_base(pr_oid, child_pr_oid)
-                    .expect("Failed to get merge oid")
-                    == pr_oid,
-                "child PR branch was not based on PR"
-            );
+        let child_pr_branch = bare
+            .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
+            .expect("Expected to find other branch on bare upstream");
+        let child_pr_oid = child_pr_branch
+            .get()
+            .target()
+            .expect("Failed to get other oid from pr branch");
+        assert!(
+            bare.merge_base(pr_oid, child_pr_oid)
+                .expect("Failed to get merge oid")
+                == pr_oid,
+            "child PR branch was not based on PR"
+        );
+    }
 
-        };
+    #[tokio::test]
+    async fn stack_multi_in_pr() {
+        let (_temp_dir, jj, bare) = setup_test_env();
+        let config = create_test_config();
+        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
+        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+
+        let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
+        let change = jj
+            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .expect("Failed to read revision");
+
+        let child_rev = create_jujutsu_commit(workdir, "Test other commit", "file other");
+        let child_change = jj
+            .read_revision(&config, crate::jj::ChangeId::from_str(child_rev))
+            .expect("Failed to read child revision");
+        let _ = handle_revs(
+            &config,
+            &jj,
+            [(
+                change.clone(),
+                None,
+            ), (
+                child_change.clone(),
+                None
+            )],
+            trunk_oid,
+        )
+        .await
+        .expect("Expected to get branch name");
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+        assert!(pr_oid != trunk_oid, "base PR was equal to trunk");
+
+        let child_pr_branch = bare
+            .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
+            .expect("Expected to find other branch on bare upstream");
+        let child_pr_oid = child_pr_branch
+            .get()
+            .target()
+            .expect("Failed to get other oid from pr branch");
+        assert!(
+            bare.merge_base(pr_oid, child_pr_oid)
+                .expect("Failed to get merge oid")
+                == pr_oid,
+            "child PR branch was not based on PR"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_rebase_when_change_is_not_rebased() {
+        let (_temp_dir, jj, bare) = setup_test_env();
+        let config = create_test_config();
+        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
+        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+
+        let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
+        let change = jj
+            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .expect("Failed to read revision");
+        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
+            .await
+            .expect("Expected to get branch name");
+
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let initial_pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
 
         jj.git_repo
             .set_head_detached(trunk_oid)
             .expect("Failed to checkout trunk");
-        let _ = create_jujutsu_commit(repo_path.as_path(), "New head", "file 3");
+        let _ = create_jujutsu_commit(workdir, "New head", "file 3");
         let updated_trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -609,29 +770,265 @@ mod tests {
         )
         .await
         .expect("Expected to get branch name");
-        initial_pr_oid = {
-            let pr_branch = bare
-                .find_branch("spr/test/test-commit", git2::BranchType::Local)
-                .expect("Expected to find branch on bare upstream");
-            let pr_oid = pr_branch
-                .get()
-                .target()
-                .expect("Failed to get oid from pr branch");
-            assert!(
-                bare.merge_base(pr_oid, initial_pr_oid)
-                    .expect("Failed to get merge oid")
-                    == initial_pr_oid,
-                "PR branch was not based on previous commit"
-            );
-            assert!(
-                bare.merge_base(pr_oid, updated_trunk_oid)
-                    .expect("Failed to get merge oid")
-                    == updated_trunk_oid,
-                "PR branch was not based on updated_trunk_oid"
-            );
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+        assert!(
+            bare.merge_base(pr_oid, initial_pr_oid)
+                .expect("Failed to get merge oid")
+                == initial_pr_oid,
+            "PR branch was not based on previous commit"
+        );
+        let head_base = bare.merge_base(pr_oid, updated_trunk_oid)
+                .expect("Failed to get merge oid");
+        assert!(head_base != updated_trunk_oid,
+            "PR was rebased to HEAD"
+        );
+        assert!(head_base == trunk_oid,
+            "Pr HEAD is no longer based on the previous trunk"
+        );
+    }
 
-            pr_branch.get().target().expect("pr branch didn't have oid")
-        };
+    #[tokio::test]
+    async fn rebase_to_new_base() {
+        let (_temp_dir, jj, bare) = setup_test_env();
+        let config = create_test_config();
+        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
+        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+
+        let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
+        let change = jj
+            .read_revision(&config, crate::jj::ChangeId::from_str(rev.clone()))
+            .expect("Failed to read revision");
+        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
+            .await
+            .expect("Expected to get branch name");
+
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let initial_pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+
+        jj.git_repo
+            .set_head_detached(trunk_oid)
+            .expect("Failed to checkout trunk");
+        let new_trunk = create_jujutsu_commit(workdir, "New head", "file 3");
+        let updated_trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+        jj.git_repo
+            .find_remote("origin")
+            .expect("Didn't find origin on repo")
+            .push(&["HEAD:refs/heads/main"], None)
+            .expect("Failed to push new main");
+
+        rebase_jj_commit(workdir, crate::jj::ChangeId::from_str(rev), crate::jj::ChangeId::from_str(new_trunk));
+        
+
+        let _ = handle_revs(
+            &config,
+            &jj,
+            [(
+                change.clone(),
+                Some(crate::github::PullRequest {
+                    number: 1,
+                    state: crate::github::PullRequestState::Open,
+                    title: String::from(""),
+                    body: None,
+                    base_oid: git2::Oid::zero(),
+                    sections: std::collections::BTreeMap::new(),
+                    base: crate::github::GitHubBranch::new_from_branch_name(
+                        "main", "origin", "main",
+                    ),
+                    head_oid: git2::Oid::zero(),
+                    head: crate::github::GitHubBranch::new_from_branch_name(
+                        "spr/test/test-commit",
+                        "origin",
+                        "main",
+                    ),
+                    merge_commit: None,
+                    reviewers: std::collections::HashMap::new(),
+                    review_status: None,
+                }),
+            )],
+            updated_trunk_oid,
+        )
+        .await
+        .expect("Expected to get branch name");
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+        assert!(
+            bare.merge_base(pr_oid, initial_pr_oid)
+                .expect("Failed to get merge oid")
+                == initial_pr_oid,
+            "PR branch was not based on previous commit"
+        );
+        let head_base = bare.merge_base(pr_oid, updated_trunk_oid)
+                .expect("Failed to get merge oid");
+        assert!(head_base == updated_trunk_oid,
+            "PR was not rebased to HEAD"
+        );
+    }
+
+    #[tokio::test]
+    async fn rebase_stacked_pr() {
+        let (_temp_dir, jj, bare) = setup_test_env();
+        let config = create_test_config();
+        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
+        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+
+        let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
+        let change = jj
+            .read_revision(&config, crate::jj::ChangeId::from_str(rev.clone()))
+            .expect("Failed to read revision");
+
+        let child_rev = create_jujutsu_commit(workdir, "Test other commit", "file other");
+        let child_change = jj
+            .read_revision(&config, crate::jj::ChangeId::from_str(child_rev))
+            .expect("Failed to read child revision");
+        let _ = handle_revs(
+            &config,
+            &jj,
+            [(
+                change.clone(),
+                None,
+            ), (
+                child_change.clone(),
+                None,
+            )],
+            trunk_oid,
+        )
+        .await
+        .expect("Expected to get branch name");
+        let child_pr_branch = bare
+            .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
+            .expect("Expected to find other branch on bare upstream");
+        let initial_child_pr_oid = child_pr_branch
+            .get()
+            .target()
+            .expect("Failed to get other oid from pr branch");
+
+        new_on_jj_commit(workdir, ChangeId::from_str(rev.clone()));
+        amend_jujutsu_revision(workdir, "file 2");
+        let _ = handle_revs(
+            &config,
+            &jj,
+            [(
+                change.clone(),
+                Some(crate::github::PullRequest {
+                    number: 1,
+                    state: crate::github::PullRequestState::Open,
+                    title: String::from(""),
+                    body: None,
+                    base_oid: git2::Oid::zero(),
+                    sections: std::collections::BTreeMap::new(),
+                    base: crate::github::GitHubBranch::new_from_branch_name(
+                        "main", "origin", "main",
+                    ),
+                    head_oid: git2::Oid::zero(),
+                    head: crate::github::GitHubBranch::new_from_branch_name(
+                        "spr/test/test-commit",
+                        "origin",
+                        "main",
+                    ),
+                    merge_commit: None,
+                    reviewers: std::collections::HashMap::new(),
+                    review_status: None,
+                }),
+            ), (
+                child_change.clone(),
+                Some(crate::github::PullRequest {
+                    number: 1,
+                    state: crate::github::PullRequestState::Open,
+                    title: String::from(""),
+                    body: None,
+                    base_oid: git2::Oid::zero(),
+                    sections: std::collections::BTreeMap::new(),
+                    base: crate::github::GitHubBranch::new_from_branch_name(
+                        "spr/test/test-commit",
+                        "origin", "main",
+                    ),
+                    head_oid: git2::Oid::zero(),
+                    head: crate::github::GitHubBranch::new_from_branch_name(
+                        "spr/test/test-other-commit",
+                        "origin",
+                        "main",
+                    ),
+                    merge_commit: None,
+                    reviewers: std::collections::HashMap::new(),
+                    review_status: None,
+                }),
+            )],
+            trunk_oid,
+        )
+        .await
+        .expect("Expected to get branch name");
+
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+        assert!(pr_oid != trunk_oid, "base PR was equal to trunk");
+
+        let child_pr_branch = bare
+            .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
+            .expect("Expected to find other branch on bare upstream");
+        let child_pr_oid = child_pr_branch
+            .get()
+            .target()
+            .expect("Failed to get other oid from pr branch");
+        assert!(
+            bare.merge_base(pr_oid, child_pr_oid)
+                .expect("Failed to get merge oid")
+                == pr_oid,
+            "child PR branch was not based on PR"
+        );
+        assert!(
+            bare.merge_base(initial_child_pr_oid, child_pr_oid)
+                .expect("Failed to get merge oid")
+                == initial_child_pr_oid,
+            "child PR branch was not based on initial child PR"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_update_without_change() {
+        let (_temp_dir, jj, bare) = setup_test_env();
+        let config = create_test_config();
+        let trunk_oid = jj.git_repo.refname_to_id("HEAD").expect("Failed to revparse HEAD");
+        let workdir = jj.git_repo.workdir().expect("Got no workdir on git/jj repo");
+
+        let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
+        let change = jj
+            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .expect("Failed to read revision");
+        let _ = handle_revs(&config, &jj, [(change.clone(), None)], trunk_oid)
+            .await
+            .expect("Expected to get branch name");
+
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let initial_pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
         let _ = handle_revs(
             &config,
             &jj,
@@ -662,16 +1059,13 @@ mod tests {
         )
         .await
         .expect("Expected to get branch name");
-        {
-            let pr_branch = bare
-                .find_branch("spr/test/test-commit", git2::BranchType::Local)
-                .expect("Expected to find branch on bare upstream");
-            let pr_oid = pr_branch
-                .get()
-                .target()
-                .expect("Failed to get oid from pr branch");
-            assert!(pr_oid == initial_pr_oid, "PR was updated without changes");
-        };
-
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find branch on bare upstream");
+        let pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+        assert!(pr_oid == initial_pr_oid, "PR was updated without changes");
     }
 }
