@@ -1,7 +1,7 @@
 use crate::{
     error::{Error, Result, ResultExt},
     github::PullRequest,
-    message::MessageSection,
+    message::{MessageSection, build_github_body},
     output::output,
     utils::run_command,
 };
@@ -69,7 +69,11 @@ async fn do_stacked<H: AsRef<str>>(
         return Ok(());
     }
 
-    let message = if let Some(ref msg) = opts.message {
+    let message = if head_oid == base_oid
+        && let Some(title) = revision.message.get(&MessageSection::Title)
+    {
+        format!("{}\n\n{}", title, build_github_body(&revision.message))
+    } else if let Some(ref msg) = opts.message {
         msg.clone()
     } else {
         dialoguer::Input::<String>::new()
