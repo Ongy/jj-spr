@@ -1,6 +1,7 @@
 use crate::{
     error::{Error, Result, ResultExt},
     github::PullRequest,
+    jj::RevSet,
     message::{MessageSection, build_github_body},
     output::output,
     utils::run_command,
@@ -224,8 +225,12 @@ pub async fn stacked(
     // i.e. all revisions between the current and upstream that have descriptions.
     // This somewhat funky pattern allows us to work both in the `jj new` case where changes need to be squashed into the main revision
     // and in the `jj edit` (or `jj new` + `jj describe`) case where the current `@` is the intended PR commit.
-    let revisions =
-        jj.read_revision_range(config, "::@ ~ (immutable() | description(exact:\"\"))")?;
+    let revisions = jj.read_revision_range(
+        config,
+        &RevSet::current()
+            .ancestors()
+            .without(&RevSet::immutable().or(&RevSet::description("exact:\"\""))),
+    )?;
 
     // At this point we cannot deal with revisions that have multiple parents :/
     if let Some(r) = revisions.iter().find(|r| r.parent_ids.len() != 1) {
@@ -301,7 +306,7 @@ pub async fn stacked(
 #[cfg(test)]
 mod tests {
     use super::handle_revs;
-    use crate::jj::ChangeId;
+    use crate::jj::{ChangeId, RevSet};
     use crate::testing;
     use std::fs;
 
@@ -317,7 +322,11 @@ mod tests {
         jj.squash().expect("Failed to squash revision");
     }
 
-    fn create_jujutsu_commit(jj: &crate::jj::Jujutsu, message: &str, file_content: &str) -> String {
+    fn create_jujutsu_commit(
+        jj: &crate::jj::Jujutsu,
+        message: &str,
+        file_content: &str,
+    ) -> ChangeId {
         // Create a file
         let file_path = jj
             .git_repo
@@ -327,8 +336,10 @@ mod tests {
         fs::write(&file_path, file_content).expect("Failed to write test file");
 
         jj.commit(message).expect("Failed to commit revision");
-        jj.revset_to_change_id("@-")
-            .expect("Failed to get changeid of '@-'")
+        ChangeId::from(
+            jj.revset_to_change_id(&RevSet::current().parent())
+                .expect("Failed to get changeid of '@-'"),
+        )
     }
 
     #[tokio::test]
@@ -341,10 +352,7 @@ mod tests {
 
         let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
         let change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(rev),
-            )
+            .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
         let _ = handle_revs(
             &testing::config::basic(),
@@ -385,10 +393,7 @@ mod tests {
 
         let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
         let change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(rev),
-            )
+            .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
         let _ = handle_revs(
             &testing::config::basic(),
@@ -469,10 +474,7 @@ mod tests {
 
         let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
         let change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(rev),
-            )
+            .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
         let _ = handle_revs(
             &testing::config::basic(),
@@ -496,10 +498,7 @@ mod tests {
 
         let child_rev = create_jujutsu_commit(&jj, "Test other commit", "file other");
         let child_change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(child_rev),
-            )
+            .read_revision(&testing::config::basic(), child_rev)
             .expect("Failed to read child revision");
         let _ = handle_revs(
             &testing::config::basic(),
@@ -571,18 +570,12 @@ mod tests {
 
         let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
         let change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(rev),
-            )
+            .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
 
         let child_rev = create_jujutsu_commit(&jj, "Test other commit", "file other");
         let child_change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(child_rev),
-            )
+            .read_revision(&testing::config::basic(), child_rev)
             .expect("Failed to read child revision");
         let _ = handle_revs(
             &testing::config::basic(),
@@ -629,10 +622,7 @@ mod tests {
 
         let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
         let change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(rev),
-            )
+            .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
         let _ = handle_revs(
             &testing::config::basic(),
@@ -734,10 +724,7 @@ mod tests {
 
         let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
         let change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(rev.clone()),
-            )
+            .read_revision(&testing::config::basic(), rev.clone())
             .expect("Failed to read revision");
         let _ = handle_revs(
             &testing::config::basic(),
@@ -773,7 +760,7 @@ mod tests {
             .push(&["HEAD:refs/heads/main"], None)
             .expect("Failed to push new main");
 
-        jj.rebase_branch(rev, ChangeId::from_str(new_trunk))
+        jj.rebase_branch(&RevSet::from(&rev), ChangeId::from(new_trunk.as_ref()))
             .expect("Failed to rebase revision");
 
         let _ = handle_revs(
@@ -838,18 +825,12 @@ mod tests {
 
         let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
         let change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(rev.clone()),
-            )
+            .read_revision(&testing::config::basic(), rev.clone())
             .expect("Failed to read revision");
 
         let child_rev = create_jujutsu_commit(&jj, "Test other commit", "file other");
         let child_change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(child_rev),
-            )
+            .read_revision(&testing::config::basic(), child_rev)
             .expect("Failed to read child revision");
         let _ = handle_revs(
             &testing::config::basic(),
@@ -870,7 +851,7 @@ mod tests {
             .target()
             .expect("Failed to get other oid from pr branch");
 
-        jj.new_revision(rev, None as Option<&str>, true)
+        jj.new_revision(Some(RevSet::from(&rev)), None as Option<&str>, true)
             .expect("Failed to create new revision");
         amend_jujutsu_revision(&jj, "file 2");
         let _ = handle_revs(
@@ -974,10 +955,7 @@ mod tests {
 
         let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
         let change = jj
-            .read_revision(
-                &testing::config::basic(),
-                crate::jj::ChangeId::from_str(rev),
-            )
+            .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
         let _ = handle_revs(
             &testing::config::basic(),

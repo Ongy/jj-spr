@@ -7,6 +7,7 @@
 
 use std::{
     ffi::OsStr,
+    fmt::Display,
     path::PathBuf,
     process::{Command, Stdio},
 };
@@ -29,9 +30,9 @@ impl AsRef<str> for ChangeId {
     }
 }
 
-impl ChangeId {
-    pub fn from_str(id: String) -> Self {
-        ChangeId { id }
+impl<S: Into<String>> From<S> for ChangeId {
+    fn from(id: S) -> Self {
+        ChangeId { id: id.into() }
     }
 }
 
@@ -60,13 +61,115 @@ pub struct Jujutsu {
     pub git_repo: git2::Repository,
 }
 
+#[derive(Debug)]
+pub struct RevSet(String);
+
+impl RevSet {
+    // Constants
+    pub fn immutable() -> Self {
+        RevSet("immutable()".into())
+    }
+
+    pub fn current() -> Self {
+        RevSet("@".into())
+    }
+
+    // From known
+    /// This is only intended to be used for user input
+    pub fn from_arg<S: Into<String>>(s: S) -> Self {
+        RevSet(s.into())
+    }
+
+    pub fn from_local_branch(b: git2::Branch) -> Result<Self> {
+        let name = b.name()?;
+        if let Some(name) = name {
+            Ok(RevSet(format!("bookmarks({})", name)))
+        } else {
+            Err(Error::new("Got branch with no name"))
+        }
+    }
+
+    pub fn from_remote_branch<S: Display>(b: git2::Branch, r: S) -> Result<Self> {
+        let name = b.name()?;
+        if let Some(name) = name {
+            if let Some(name) = name.strip_prefix(&format!("{}/", r)) {
+                Ok(RevSet(format!("remote_bookmarks({}, {})", name, r)))
+            } else {
+                Err(Error::new(format!(
+                    "Branch {} is not on provided remote",
+                    name
+                )))
+            }
+        } else {
+            Err(Error::new("Got branch with no name"))
+        }
+    }
+
+    pub fn description<S: AsRef<str>>(d: S) -> Self {
+        RevSet(format!("description({})", d.as_ref()))
+    }
+
+    // binary
+    pub fn and(&self, o: &Self) -> Self {
+        RevSet(format!("({}) & ({})", self.0, o.0))
+    }
+
+    pub fn or(&self, o: &Self) -> Self {
+        RevSet(format!("({}) | ({})", self.0, o.0))
+    }
+
+    pub fn without(&self, o: &Self) -> Self {
+        RevSet(format!("({}) ~ ({})", self.0, o.0))
+    }
+
+    pub fn to(&self, o: &Self) -> Self {
+        o.ancestors().without(&self.ancestors())
+    }
+
+    // Unary
+    pub fn ancestors(&self) -> Self {
+        RevSet(format!("::({})", self.0))
+    }
+
+    pub fn parent(&self) -> Self {
+        RevSet(format!("({})-", self.0))
+    }
+
+    // Restrictions
+    pub fn exactly(&self, count: u64) -> Self {
+        RevSet(format!("exactly({}, {count})", self.0))
+    }
+
+    pub fn unique(&self) -> Self {
+        self.exactly(1)
+    }
+}
+
+impl AsRef<str> for RevSet {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl From<&ChangeId> for RevSet {
+    fn from(id: &ChangeId) -> Self {
+        RevSet(format!("change_id({})", id.id))
+    }
+}
+
+impl From<&git2::Commit<'_>> for RevSet {
+    fn from(c: &git2::Commit) -> Self {
+        RevSet(format!("commit_id({})", c.id().to_string()))
+    }
+}
+
 impl Jujutsu {
     pub fn read_revision(&self, config: &Config, id: ChangeId) -> Result<Revision> {
         let output = self.run_captured_with_args([
             "log",
             "--no-graph",
             "-r",
-            id.id.as_str(),
+            RevSet::from(&id).unique().as_ref(),
             "--template",
             "parents.map(|c| c.change_id()).join( \",\") ++ \"\\n\" ++ description",
         ])?;
@@ -80,7 +183,7 @@ impl Jujutsu {
 
         for segment in parents.split(|c| c == ',') {
             if !segment.is_empty() {
-                let parent_id = ChangeId::from_str(String::from(segment));
+                let parent_id = ChangeId::from(String::from(segment));
                 parent_ids.push(parent_id)
             }
         }
@@ -145,13 +248,13 @@ impl Jujutsu {
         Ok(merge_base)
     }
 
-    pub fn read_revision_range(&self, config: &Config, range: &str) -> Result<Vec<Revision>> {
+    pub fn read_revision_range(&self, config: &Config, range: &RevSet) -> Result<Vec<Revision>> {
         // Get commit range using jj
         let output = self.run_captured_with_args([
             "log",
             "--no-graph",
             "-r",
-            range,
+            range.as_ref(),
             "--template",
             "change_id ++ \"\\n\"",
         ])?;
@@ -160,8 +263,7 @@ impl Jujutsu {
         for line in output.lines() {
             let line = line.trim();
             if !line.is_empty() {
-                let change_id = ChangeId::from_str(String::from(line));
-                commits.push(self.read_revision(config, change_id)?);
+                commits.push(self.read_revision(config, line.into())?);
             }
         }
 
@@ -431,12 +533,12 @@ impl Jujutsu {
         Ok(())
     }
 
-    pub fn revset_to_change_id<R: AsRef<str>>(&self, revset: R) -> Result<String> {
+    pub fn revset_to_change_id(&self, revset: &RevSet) -> Result<ChangeId> {
         let output = self.run_captured_with_args([
             "log",
             "--no-graph",
             "-r",
-            format!("exactly({}, 1)", revset.as_ref()).as_mut_str(),
+            revset.unique().as_ref(),
             "--template",
             "change_id",
         ])?;
@@ -444,11 +546,11 @@ impl Jujutsu {
         Ok(output.trim().into())
     }
 
-    pub fn squash_copy(&self, revision: &str, onto: ChangeId) -> Result<()> {
+    pub fn squash_copy(&self, revision: &RevSet, onto: ChangeId) -> Result<()> {
         let _ = self.run_captured_with_args([
             "duplicate",
             "--no-pager",
-            &revision,
+            revision.as_ref(),
             "--destination",
             onto.id.as_str(),
             "--quiet",
@@ -519,16 +621,16 @@ impl Jujutsu {
         }
     }
 
-    pub fn abandon(&self, change: ChangeId) -> Result<()> {
+    pub fn abandon(&self, revset: &RevSet) -> Result<()> {
         std::process::Command::new("jj")
-            .args(["abandon", change.as_ref()])
+            .args(["abandon", revset.as_ref()])
             .current_dir(self.repo_path.as_path())
             .status()?;
 
         Ok(())
     }
 
-    pub fn rebase_branch<S: AsRef<str>>(&self, revset: S, target: ChangeId) -> Result<()> {
+    pub fn rebase_branch(&self, revset: &RevSet, target: ChangeId) -> Result<()> {
         std::process::Command::new("jj")
             .args([
                 "rebase",
@@ -552,13 +654,16 @@ impl Jujutsu {
         Ok(())
     }
 
-    pub fn new_revision<C: AsRef<str>, M: AsRef<str>>(
+    pub fn new_revision<M: AsRef<str>>(
         &self,
-        commit: C,
+        parents: Option<RevSet>,
         message: Option<M>,
         no_edit: bool,
     ) -> Result<()> {
-        let mut args = vec!["new", commit.as_ref()];
+        let mut args = vec!["new"];
+        if let Some(ref r) = parents {
+            args.push(r.as_ref());
+        }
         if let Some(ref m) = message {
             args.extend(["-m", m.as_ref()]);
         }
@@ -768,14 +873,14 @@ mod tests {
         let git_repo = git2::Repository::open(&repo_path).expect("Failed to open git repository");
         let jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
 
-        let c1 = jj.read_revision(&config, ChangeId::from_str(commit2));
+        let c1 = jj.read_revision(&config, ChangeId::from(commit2));
         assert!(c1.is_ok(), "Failed to read @ revision: {:?}", c1.err());
         assert!(
             c1.unwrap().parent_ids.len() == 1,
             "Got more than one parent of c1",
         );
 
-        let c2 = jj.read_revision(&config, ChangeId::from_str(commit4));
+        let c2 = jj.read_revision(&config, ChangeId::from(commit4));
         assert!(c2.is_ok(), "Failed to read @ revision: {:?}", c2.err());
         assert!(
             c2.unwrap().parent_ids.len() == 2,

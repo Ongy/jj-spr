@@ -1,6 +1,10 @@
 use std::iter::zip;
 
-use crate::{error::Result, github::PullRequestState, jj::ChangeId};
+use crate::{
+    error::Result,
+    github::PullRequestState,
+    jj::{ChangeId, RevSet},
+};
 
 #[derive(Debug, clap::Parser)]
 pub struct SyncOpts {
@@ -26,16 +30,18 @@ pub async fn sync(
     opts: SyncOpts,
 ) -> Result<()> {
     jj.run_git_fetch()?;
-    let revset = opts.revset.as_ref().map(|s| s.as_str()).unwrap_or("@");
+    let revset = opts
+        .revset
+        .as_ref()
+        .map(|s| RevSet::from_arg(s))
+        .unwrap_or(RevSet::current());
 
     // We are interested in all revisions that have PRs
     let revisions = jj.read_revision_range(
         config,
-        format!(
-            "::({}) & ({})",
-            revset, "description(glob:\"*Pull Request:*\") ~ immutable()",
-        )
-        .as_str(),
+        &revset
+            .ancestors()
+            .and(&RevSet::description("glob:\"*Pull Request:*\"").without(&RevSet::immutable())),
     )?;
 
     let pull_requests: Result<Vec<_>> =
@@ -62,12 +68,12 @@ pub async fn sync(
 
         // TODO: Should this only abandon changes of PRs that have been merged?
         if pr.state == PullRequestState::Closed {
-            jj.abandon(rev.id)?;
+            jj.abandon(&RevSet::from(&rev.id).unique())?;
         }
     }
     jj.rebase_branch(
-        revset,
-        ChangeId::from_str(format!(
+        &revset,
+        ChangeId::from(format!(
             "{}@{}",
             config.master_ref.branch_name(),
             config.remote_name

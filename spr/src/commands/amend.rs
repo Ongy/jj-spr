@@ -8,6 +8,7 @@
 use crate::{
     error::{Error, Result},
     github::PullRequest,
+    jj::RevSet,
     message::{MessageSection, validate_commit_message},
     output::{output, write_commit_title},
 };
@@ -48,15 +49,17 @@ fn do_amend<I: IntoIterator<Item = (crate::jj::PreparedCommit, Option<PullReques
             if opts.pull_code_changes
                 && let Some(old_rev) = commit.message.get(&MessageSection::LastCommit)
             {
+                let base_commit = jj.git_repo.find_commit(git2::Oid::from_str(old_rev)?)?;
+                let head_branch = jj.git_repo.find_branch(
+                    format!("{}/{}", config.remote_name, pull_request.head.branch_name()).as_str(),
+                    git2::BranchType::Remote,
+                )?;
                 jj.squash_copy(
-                    format!(
-                        "commit_id({})..remote_bookmarks({}, {})",
-                        old_rev,
-                        pull_request.head.branch_name(),
-                        config.remote_name
-                    )
-                    .as_str(),
-                    crate::jj::ChangeId::from_str(commit.short_id.clone()),
+                    &RevSet::from(&base_commit).to(&RevSet::from_remote_branch(
+                        head_branch,
+                        &config.remote_name,
+                    )?),
+                    crate::jj::ChangeId::from(commit.short_id.clone()),
                 )?;
             }
 
@@ -132,10 +135,19 @@ pub async fn amend(
 #[cfg(test)]
 mod tests {
     use super::do_amend;
-    use crate::{commands::amend::AmendOptions, message::MessageSection, testing};
+    use crate::{
+        commands::amend::AmendOptions,
+        jj::{ChangeId, RevSet},
+        message::MessageSection,
+        testing,
+    };
     use std::fs;
 
-    fn create_jujutsu_commit(jj: &crate::jj::Jujutsu, message: &str, file_content: &str) -> String {
+    fn create_jujutsu_commit(
+        jj: &crate::jj::Jujutsu,
+        message: &str,
+        file_content: &str,
+    ) -> ChangeId {
         // Create a file
         let file_path = jj
             .git_repo
@@ -145,7 +157,7 @@ mod tests {
         fs::write(&file_path, file_content).expect("Failed to write test file");
 
         jj.commit(message).expect("Failed to commit revision");
-        jj.revset_to_change_id("@-")
+        jj.revset_to_change_id(&RevSet::current().parent())
             .expect("Failed to get changeid of '@-'")
     }
 
@@ -233,12 +245,12 @@ mod tests {
         let change = jj
             .get_prepared_commit_for_revision(
                 &testing::config::basic(),
-                format!("change_id({})", rev).as_str(),
+                format!("change_id({})", rev.as_ref()).as_str(),
             )
             .expect("Failed to prepare commit");
         let pre_amend_tree = jj
             .get_tree_oid_for_commit(
-                jj.resolve_revision_to_commit_id(rev.as_str())
+                jj.resolve_revision_to_commit_id(rev.as_ref())
                     .expect("Failed to get commit for revision"),
             )
             .expect("Failed to get tree for commit");
@@ -288,10 +300,7 @@ mod tests {
 
         // Reread the changed commit so we can check whether it was updated
         let change = jj
-            .get_prepared_commit_for_revision(
-                &testing::config::basic(),
-                format!("change_id({})", rev).as_str(),
-            )
+            .get_prepared_commit_for_revision(&testing::config::basic(), rev.as_ref())
             .expect("Failed to prepare commit");
         assert_eq!(
             change.message.get(&MessageSection::Title),
@@ -311,7 +320,7 @@ mod tests {
 
         let post_amend_tree = jj
             .get_tree_oid_for_commit(
-                jj.resolve_revision_to_commit_id(rev.as_str())
+                jj.resolve_revision_to_commit_id(rev.as_ref())
                     .expect("Failed to get commit for revision"),
             )
             .expect("Failed to get tree for commit");

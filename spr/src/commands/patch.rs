@@ -7,6 +7,7 @@
 
 use crate::{
     error::{Error, Result},
+    jj::RevSet,
     message::{MessageSection, MessageSectionsMap, build_commit_message},
 };
 
@@ -37,8 +38,12 @@ fn do_patch(
     )?;
     message.insert(MessageSection::LastCommit, resolved.to_string());
     let message = build_commit_message(message);
+    let branch = jj.git_repo.find_branch(
+        format!("{}/{}", config.remote_name, config.master_ref.branch_name()).as_str(),
+        git2::BranchType::Remote,
+    )?;
     jj.new_revision(
-        format!("{}@{}", config.master_ref.branch_name(), config.remote_name),
+        Some(RevSet::from_remote_branch(branch, config.remote_name.clone())?.unique()),
         Some(message),
         false,
     )?;
@@ -78,14 +83,17 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::do_patch;
-    use crate::{jj::ChangeId, message::MessageSection, testing};
+    use crate::{jj::RevSet, message::MessageSection, testing};
 
     #[tokio::test]
     async fn test_single_on_head() {
         let pr_nr = 1;
         let (_temp_dir, jj, _) = testing::setup::repo_with_origin();
-        let commit_oid = testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-branch");
-        let tree_oid = jj.get_tree_oid_for_commit(commit_oid).expect("Expected to get tree for commit");
+        let commit_oid =
+            testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-branch");
+        let tree_oid = jj
+            .get_tree_oid_for_commit(commit_oid)
+            .expect("Expected to get tree for commit");
 
         do_patch(
             &jj,
@@ -98,8 +106,11 @@ mod tests {
         )
         .expect("Do not expect do_patch to fail.");
 
+        let change = jj
+            .revset_to_change_id(&RevSet::current())
+            .expect("Failed to resolve change of current");
         let rev = jj
-            .read_revision(&testing::config::basic(), ChangeId::from_str("@".into()))
+            .read_revision(&testing::config::basic(), change)
             .expect("Failed to read revision after patch");
 
         let new_tree = jj
