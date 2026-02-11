@@ -7,7 +7,7 @@
 
 use crate::{
     error::{Error, Result},
-    message::{MessageSection, MessageSectionsMap, build_commit_message},
+    message::{build_commit_message, MessageSection, MessageSectionsMap},
 };
 
 #[derive(Debug, clap::Parser)]
