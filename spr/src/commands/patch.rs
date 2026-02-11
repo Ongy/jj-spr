@@ -7,7 +7,7 @@
 
 use crate::{
     error::{Error, Result},
-    message::{build_commit_message, MessageSection, MessageSectionsMap},
+    message::{MessageSection, MessageSectionsMap, build_commit_message},
 };
 
 #[derive(Debug, clap::Parser)]
@@ -76,9 +76,6 @@ pub async fn patch(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::fs;
-
-    use git2::Time;
 
     use super::do_patch;
     use crate::{jj::ChangeId, message::MessageSection, testing};
@@ -87,53 +84,8 @@ mod tests {
     async fn test_single_on_head() {
         let pr_nr = 1;
         let (_temp_dir, jj, _) = testing::setup::repo_with_origin();
-
-        let file_path = jj
-            .git_repo
-            .workdir()
-            .expect("Failed to extract workdir from JJ handle")
-            .join("test.txt");
-        fs::write(&file_path, "PR change").expect("Failed to write test file");
-
-        let mut index = jj
-            .git_repo
-            .index()
-            .expect("Couldn't get index from git repo");
-        index
-            .add_path(std::path::Path::new("test.txt"))
-            .expect("Failed to add test file to index");
-        let sig = git2::Signature::new("User", "user@example.com", &Time::new(0, 0))
-            .expect("Failed to build commit signature");
-        let tree_oid = index.write_tree().expect("Failed to write tree to disk");
-        let tree = jj
-            .git_repo
-            .find_tree(tree_oid)
-            .expect("Failed to find tree from OID");
-        let trunk = jj
-            .git_repo
-            .find_commit(
-                jj.git_repo
-                    .revparse_single("HEAD")
-                    .expect("Failed to parse revparse HEAD")
-                    .id(),
-            )
-            .expect("Failed to find commit for HEAD");
-        let commit_oid = jj
-            .git_repo
-            .commit(None, &sig, &sig, "Test commit", &tree, &[&trunk])
-            .expect("Failed to commit to repo");
-
-        let mut remote = jj
-            .git_repo
-            .find_remote("origin")
-            .expect("Expected to find origin as remote");
-
-        remote
-            .push(
-                &[format!("{}:refs/heads/spr/test/test-branch", commit_oid)],
-                None,
-            )
-            .expect("Failed to push");
+        let commit_oid = testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-branch");
+        let tree_oid = jj.get_tree_oid_for_commit(commit_oid).expect("Expected to get tree for commit");
 
         do_patch(
             &jj,

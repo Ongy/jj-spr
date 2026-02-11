@@ -216,4 +216,105 @@ mod tests {
             "Last Commit was changed"
         );
     }
+
+    #[tokio::test]
+    async fn test_pull_changes_on_head() {
+        let (_temp_dir, jj, _) = testing::setup::repo_with_origin();
+        let trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+
+        let rev = create_jujutsu_commit(
+            &jj,
+            format!("Test commit\n\nLast Commit: {trunk_oid}").as_str(),
+            "file 1",
+        );
+        let change = jj
+            .get_prepared_commit_for_revision(
+                &testing::config::basic(),
+                format!("change_id({})", rev).as_str(),
+            )
+            .expect("Failed to prepare commit");
+        let pre_amend_tree = jj
+            .get_tree_oid_for_commit(
+                jj.resolve_revision_to_commit_id(rev.as_str())
+                    .expect("Failed to get commit for revision"),
+            )
+            .expect("Failed to get tree for commit");
+
+        jj.git_repo
+            .set_head_detached(trunk_oid)
+            .expect("Expected to be able to checkout trunk");
+        testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-commit");
+
+        let _ = do_amend(
+            AmendOptions {
+                all: false,
+                base: None,
+                revision: None,
+                pull_code_changes: true,
+            },
+            &jj,
+            &testing::config::basic(),
+            [(
+                change.clone(),
+                Some(crate::github::PullRequest {
+                    number: 1,
+                    state: crate::github::PullRequestState::Open,
+                    title: String::from("New Title"),
+                    body: None,
+                    base_oid: git2::Oid::zero(),
+                    sections: std::collections::BTreeMap::from([
+                        (MessageSection::Summary, "New Summary".into()),
+                        (MessageSection::Title, "New Title".into()),
+                    ]),
+                    base: crate::github::GitHubBranch::new_from_branch_name(
+                        "main", "origin", "main",
+                    ),
+                    head_oid: git2::Oid::zero(),
+                    head: crate::github::GitHubBranch::new_from_branch_name(
+                        "spr/test/test-commit",
+                        "origin",
+                        "main",
+                    ),
+                    merge_commit: None,
+                    reviewers: std::collections::HashMap::new(),
+                    review_status: None,
+                }),
+            )],
+        )
+        .expect("do_amend was not expected to error");
+
+        // Reread the changed commit so we can check whether it was updated
+        let change = jj
+            .get_prepared_commit_for_revision(
+                &testing::config::basic(),
+                format!("change_id({})", rev).as_str(),
+            )
+            .expect("Failed to prepare commit");
+        assert_eq!(
+            change.message.get(&MessageSection::Title),
+            Some(&"New Title".into()),
+            "Title was not updated"
+        );
+        assert_eq!(
+            change.message.get(&MessageSection::Summary),
+            Some(&"New Summary".into()),
+            "Summary was not updated"
+        );
+        assert_eq!(
+            change.message.get(&MessageSection::LastCommit),
+            Some(&trunk_oid.to_string()),
+            "Last Commit was changed"
+        );
+
+        let post_amend_tree = jj
+            .get_tree_oid_for_commit(
+                jj.resolve_revision_to_commit_id(rev.as_str())
+                    .expect("Failed to get commit for revision"),
+            )
+            .expect("Failed to get tree for commit");
+        assert_ne!(pre_amend_tree, post_amend_tree, "Tree didn't change");
+    }
 }
