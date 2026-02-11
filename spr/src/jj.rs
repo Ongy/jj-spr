@@ -445,6 +445,7 @@ impl Jujutsu {
     }
 
     pub fn squash_copy(&self, revision: &str, onto: ChangeId) -> Result<()> {
+        println!("Going to squashcopy {revision:?}");
         let _ = self.run_captured_with_args([
             "duplicate",
             "--no-pager",
@@ -466,7 +467,7 @@ impl Jujutsu {
             "--into",
             onto.id.as_str(),
             "--from",
-            format!("exact:description(\"jj-spr-duplicate-for-{}\")", onto.id).as_str(),
+            format!("description(exact:\"jj-spr-duplicate-for-{}\")", onto.id).as_str(),
             "--quiet",
             "--use-destination-message",
         ])?;
