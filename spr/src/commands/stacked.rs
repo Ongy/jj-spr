@@ -61,7 +61,7 @@ async fn do_stacked<H: AsRef<str>>(
 
     if target_tree == head_tree && base_base == base_oid {
         let message = if let Some(pr) = revision.pull_request_number {
-            format!("No update necessary for #{}", pr)
+            format!("No update necessary for #{}", config.pull_request_url(pr))
         } else {
             "No update necessary".into()
         };
@@ -115,9 +115,9 @@ async fn do_stacked<H: AsRef<str>>(
 
     if let Some(pr) = revision.pull_request_number {
         if parents.len() == 1 {
-            output("✅", format!("Updated #{}", pr))?;
+            output("✅", format!("Updated {}", config.pull_request_url(pr)))?;
         } else {
-            output("✅", format!("Rebased #{}", pr))?;
+            output("✅", format!("Rebased {}", config.pull_request_url(pr)))?;
         }
     };
     Ok(())
@@ -186,7 +186,10 @@ async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullReq
             revision,
             head_branch: head_ref,
             base_branch: base_ref
-                .and_then(|r| r.strip_prefix("origin/").map(|s| s.into()))
+                .and_then(|r| {
+                    r.strip_prefix(format!("{}/", config.remote_name).as_str())
+                        .map(|s| s.into())
+                })
                 .unwrap_or(config.master_ref.branch_name().to_string()),
             existing_nr: maybe_pr.map(|pr| pr.number),
         });
