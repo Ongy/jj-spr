@@ -305,18 +305,6 @@ mod tests {
     use super::handle_revs;
     use crate::jj::ChangeId;
 
-    #[allow(dead_code)]
-    fn create_test_config() -> crate::config::Config {
-        crate::config::Config::new(
-            "test_owner".into(),
-            "test_repo".into(),
-            "origin".into(),
-            "main".into(),
-            "spr/test/".into(),
-            false,
-        )
-    }
-
     fn amend_jujutsu_revision(repo_path: &std::path::Path, file_content: &str) {
         // Create a file
         let file_path = repo_path.join("test.txt");
@@ -406,7 +394,6 @@ mod tests {
     #[tokio::test]
     async fn test_single_on_head() {
         let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
-        let config = create_test_config();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -418,10 +405,10 @@ mod tests {
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -452,7 +439,6 @@ mod tests {
     #[tokio::test]
     async fn test_update_pr_on_change() {
         let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
-        let config = create_test_config();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -464,10 +450,10 @@ mod tests {
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -488,7 +474,7 @@ mod tests {
 
         amend_jujutsu_revision(workdir, "file 2");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -538,7 +524,6 @@ mod tests {
     #[tokio::test]
     async fn test_stack_on_existing() {
         let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
-        let config = create_test_config();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -550,10 +535,10 @@ mod tests {
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -574,10 +559,10 @@ mod tests {
 
         let child_rev = create_jujutsu_commit(workdir, "Test other commit", "file other");
         let child_change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(child_rev))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(child_rev))
             .expect("Failed to read child revision");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -639,7 +624,6 @@ mod tests {
     #[tokio::test]
     async fn stack_multi_in_pr() {
         let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
-        let config = create_test_config();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -651,15 +635,15 @@ mod tests {
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
 
         let child_rev = create_jujutsu_commit(workdir, "Test other commit", "file other");
         let child_change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(child_rev))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(child_rev))
             .expect("Failed to read child revision");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -696,7 +680,6 @@ mod tests {
     #[tokio::test]
     async fn no_rebase_when_change_is_not_rebased() {
         let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
-        let config = create_test_config();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -708,10 +691,10 @@ mod tests {
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -745,7 +728,7 @@ mod tests {
             .expect("Failed to push new main");
 
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -803,7 +786,6 @@ mod tests {
     #[tokio::test]
     async fn rebase_to_new_base() {
         let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
-        let config = create_test_config();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -815,10 +797,10 @@ mod tests {
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(rev.clone()))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(rev.clone()))
             .expect("Failed to read revision");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -858,7 +840,7 @@ mod tests {
         );
 
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -912,7 +894,6 @@ mod tests {
     #[tokio::test]
     async fn rebase_stacked_pr() {
         let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
-        let config = create_test_config();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -924,15 +905,15 @@ mod tests {
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(rev.clone()))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(rev.clone()))
             .expect("Failed to read revision");
 
         let child_rev = create_jujutsu_commit(workdir, "Test other commit", "file other");
         let child_change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(child_rev))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(child_rev))
             .expect("Failed to read child revision");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -953,7 +934,7 @@ mod tests {
         new_on_jj_commit(workdir, ChangeId::from_str(rev.clone()));
         amend_jujutsu_revision(workdir, "file 2");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -1046,7 +1027,6 @@ mod tests {
     #[tokio::test]
     async fn test_no_update_without_change() {
         let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
-        let config = create_test_config();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -1058,10 +1038,10 @@ mod tests {
 
         let rev = create_jujutsu_commit(workdir, "Test commit", "file 1");
         let change = jj
-            .read_revision(&config, crate::jj::ChangeId::from_str(rev))
+            .read_revision(&testing::config::basic(), crate::jj::ChangeId::from_str(rev))
             .expect("Failed to read revision");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
@@ -1080,7 +1060,7 @@ mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
         let _ = handle_revs(
-            &config,
+            &testing::config::basic(),
             &jj,
             &super::StackedOptions {
                 message: Some("".into()),
