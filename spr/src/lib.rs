@@ -15,3 +15,6 @@ pub mod message;
 pub mod output;
 pub mod revision_utils;
 pub mod utils;
+
+#[cfg(test)]
+pub mod testing;
