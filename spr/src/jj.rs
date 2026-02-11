@@ -445,7 +445,6 @@ impl Jujutsu {
     }
 
     pub fn squash_copy(&self, revision: &str, onto: ChangeId) -> Result<()> {
-        println!("Going to squashcopy {revision:?}");
         let _ = self.run_captured_with_args([
             "duplicate",
             "--no-pager",
