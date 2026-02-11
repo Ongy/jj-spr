@@ -5,7 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::error::Result;
+use crate::{
+    error::{Error, Result},
+    message::{build_commit_message, MessageSection, MessageSectionsMap},
+};
 
 #[derive(Debug, clap::Parser)]
 pub struct PatchOptions {
@@ -21,21 +24,49 @@ pub struct PatchOptions {
     no_checkout: bool,
 }
 
-pub async fn patch(
-    _opts: PatchOptions,
-    _jj: &crate::jj::Jujutsu,
-    _gh: &mut crate::github::GitHub,
-    _config: &crate::config::Config,
+fn do_patch(
+    jj: &crate::jj::Jujutsu,
+    config: &crate::config::Config,
+    message: &mut MessageSectionsMap,
+    branch_name: &str,
 ) -> Result<()> {
-    // TODO: Implement Jujutsu-native patch functionality
-    // This command needs to be completely rewritten for Jujutsu workflow
-    // The current implementation uses complex Git operations that need
-    // to be translated to Jujutsu equivalents
+    jj.run_git_fetch()?;
 
-    use crate::error::Error;
-    Err(Error::new(
-        "The patch command is not yet implemented for Jujutsu workflow. \
-         Please use the GitHub web interface to create branches from pull requests for now."
-            .to_string(),
-    ))
+    let resolved = jj.resolve_reference(format!("{}/{}", config.remote_name, branch_name).as_str())?;
+    message.insert(MessageSection::LastCommit, resolved.to_string());
+    let message = build_commit_message(message);
+    jj.new_revision(
+        format!("{}@{}", config.master_ref.branch_name(), config.remote_name),
+        Some(message),
+        false,
+    )?;
+
+    jj.restore(
+        None as Option<&str>,
+        Some(format!(
+            "exactly(remote_bookmarks({}, {}), 1)",
+            branch_name, config.remote_name
+        )),
+        Some("@"),
+    )?;
+
+    Ok(())
+}
+
+pub async fn patch(
+    opts: PatchOptions,
+    jj: &crate::jj::Jujutsu,
+    gh: &mut crate::github::GitHub,
+    config: &crate::config::Config,
+) -> Result<()> {
+    let mut pr = gh.clone().get_pull_request(opts.pull_request).await?;
+
+    if !pr.base.is_master_branch() {
+        return Err(Error::new(format!(
+            "Specified PR {} is not based on the target branch. Adopting stacked PRs is not yet supported",
+            pr.number
+        )));
+    }
+
+    do_patch(jj, config, &mut pr.sections, pr.head.branch_name())
 }
