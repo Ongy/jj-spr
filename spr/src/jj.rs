@@ -417,7 +417,11 @@ impl Jujutsu {
             onto.id.as_str(),
             "--quiet",
             "--config",
-            format!("templates.duplicate_description='''\"jj-spr-duplicate-for-{}\"'''", onto.id).as_str(),
+            format!(
+                "templates.duplicate_description='''\"jj-spr-duplicate-for-{}\"'''",
+                onto.id
+            )
+            .as_str(),
         ])?;
 
         let _ = self.run_captured_with_args([
@@ -482,6 +486,52 @@ impl Jujutsu {
     pub fn run_git_fetch(&self) -> Result<()> {
         std::process::Command::new("jj")
             .args(["git", "fetch"])
+            .current_dir(self.repo_path.as_path())
+            .status()?;
+
+        Ok(())
+    }
+
+    pub fn new_revision<C: AsRef<str>, M: AsRef<str>>(
+        &self,
+        commit: C,
+        message: Option<M>,
+        no_edit: bool,
+    ) -> Result<()> {
+        let mut args = vec!["new", commit.as_ref()];
+        if let Some(ref m) = message {
+            args.extend(["-m", m.as_ref()]);
+        }
+        if no_edit {
+            args.push("--no-edit")
+        }
+        std::process::Command::new("jj")
+            .args(args)
+            .current_dir(self.repo_path.as_path())
+            .status()?;
+
+        Ok(())
+    }
+
+    pub fn restore<Fr: AsRef<str>, T: AsRef<str>, Fi: AsRef<str>>(
+        &self,
+        files: Option<Fi>,
+        from: Option<Fr>,
+        to: Option<T>,
+    ) -> Result<()> {
+        let mut args = vec!["restore"];
+        if let Some(ref from) = from {
+            args.extend(["--from", from.as_ref()]);
+        }
+        if let Some(ref to) = to {
+            args.extend(["--into", to.as_ref()]);
+        }
+        if let Some(ref files) = files {
+            args.push(files.as_ref());
+        }
+
+        std::process::Command::new("jj")
+            .args(args)
             .current_dir(self.repo_path.as_path())
             .status()?;
 
