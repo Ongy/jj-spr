@@ -1,10 +1,10 @@
 [package]
 name = "jj-spr"
 version = "0.1.0"
-authors = ["Lucio Franco"]
+authors = ["Markus Ongyerth", "Lucio Franco"]
 description = "Super Pull Requests: Power tool for Jujutsu + GitHub workflows with amend-friendly single PRs and effortless stacked PRs"
-repository = "https://github.com/LucioFranco/jj-spr"
-homepage = "https://github.com/LucioFranco/jj-spr"
+repository = "https://github.com/Ongy/jj-spr"
+homepage = "https://github.com/Ongy/jj-spr"
 license = "MIT"
 edition = "2024"
 exclude = [".github", ".gitignore"]
