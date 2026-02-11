@@ -26,11 +26,17 @@ pub async fn sync(
     opts: SyncOpts,
 ) -> Result<()> {
     jj.run_git_fetch()?;
+    let revset = opts.revset.as_ref().map(|s| s.as_str()).unwrap_or("@");
 
     // We are interested in all revisions that have PRs
     let revisions = jj.read_revision_range(
         config,
-        "description(glob:\"*Pull Request:*\") ~ immutable()",
+        format!(
+            "::({}) & ({})",
+            revset,
+            "description(glob:\"*Pull Request:*\") ~ immutable()",
+        )
+        .as_str(),
     )?;
 
     let pull_requests: Result<Vec<_>> =
@@ -61,7 +67,7 @@ pub async fn sync(
         }
     }
     jj.rebase_branch(
-        opts.revset.unwrap_or("@".into()),
+        revset,
         ChangeId::from_str("trunk()".into()),
     )?;
 
