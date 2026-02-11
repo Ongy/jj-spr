@@ -7,7 +7,7 @@
 
 use crate::{
     error::{Error, Result},
-    jj::PreparedCommit,
+    jj::{PreparedCommit, RevSet},
     message::{MessageSection, validate_commit_message},
     output::{output, write_commit_title},
 };
@@ -78,15 +78,14 @@ pub async fn amend(
             if opts.pull_code_changes
                 && let Some(old_rev) = commit.message.get(&MessageSection::LastCommit)
             {
+                let base_commit = jj.git_repo.find_commit(git2::Oid::from_str(old_rev)?)?;
+                let head_branch = jj
+                    .git_repo
+                    .find_branch(pull_request.head.branch_name(), git2::BranchType::Remote)?;
                 jj.squash_copy(
-                    format!(
-                        "commit_id({})..remote_bookmarks({}, {})",
-                        old_rev,
-                        pull_request.head.branch_name(),
-                        config.remote_name
-                    )
-                    .as_str(),
-                    crate::jj::ChangeId::from_str(commit.short_id.clone()),
+                    &RevSet::from(&base_commit)
+                        .to(&RevSet::from_remote_branch(head_branch, &config.remote_name)?),
+                    crate::jj::ChangeId::from(commit.short_id.clone()),
                 )?;
             }
 
