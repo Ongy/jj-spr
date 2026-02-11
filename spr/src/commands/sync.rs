@@ -33,8 +33,7 @@ pub async fn sync(
         config,
         format!(
             "::({}) & ({})",
-            revset,
-            "description(glob:\"*Pull Request:*\") ~ immutable()",
+            revset, "description(glob:\"*Pull Request:*\") ~ immutable()",
         )
         .as_str(),
     )?;
@@ -68,7 +67,11 @@ pub async fn sync(
     }
     jj.rebase_branch(
         revset,
-        ChangeId::from_str("trunk()".into()),
+        ChangeId::from_str(format!(
+            "{}@{}",
+            config.master_ref.branch_name(),
+            config.remote_name
+        )),
     )?;
 
     Ok(())
