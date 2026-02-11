@@ -483,6 +483,24 @@ impl Jujutsu {
         }
     }
 
+    pub fn abandon(&self, change: ChangeId) -> Result<()> {
+        std::process::Command::new("jj")
+            .args(["abandon", change.as_ref()])
+            .current_dir(self.repo_path.as_path())
+            .status()?;
+
+        Ok(())
+    }
+
+    pub fn rebase_branch<S: AsRef<str>>(&self, revset: S, target: ChangeId) -> Result<()> {
+        std::process::Command::new("jj")
+            .args(["rebase", "-b", revset.as_ref(), "--destination", target.as_ref()])
+            .current_dir(self.repo_path.as_path())
+            .status()?;
+
+        Ok(())
+    }
+
     pub fn run_git_fetch(&self) -> Result<()> {
         std::process::Command::new("jj")
             .args(["git", "fetch"])
