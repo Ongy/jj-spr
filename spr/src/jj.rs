@@ -661,7 +661,6 @@ impl Jujutsu {
         no_edit: bool,
     ) -> Result<()> {
         let mut args = vec!["new"];
-        println!("About to create a new revision on top of {parents:?}");
         if let Some(ref r) = parents {
             args.push(r.as_ref());
         }
