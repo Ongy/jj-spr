@@ -18,15 +18,6 @@ pub fn add_commit_and_push_to_remote<B: Display>(repo: &git2::Repository, branch
         flags_extended: 0,
         path: Vec::from("test.txt".as_bytes()),
     };
-    index
-        .add_frombuffer(&entry, "PR change".as_bytes())
-        .expect("Expected to be able to read from buffer");
-    let sig = git2::Signature::new("User", "user@example.com", &Time::new(0, 0))
-        .expect("Failed to build commit signature");
-    let tree_oid = index.write_tree().expect("Failed to write tree to disk");
-    let tree = repo
-        .find_tree(tree_oid)
-        .expect("Failed to find tree from OID");
     let trunk = repo
         .find_commit(
             repo.revparse_single("HEAD")
@@ -34,6 +25,15 @@ pub fn add_commit_and_push_to_remote<B: Display>(repo: &git2::Repository, branch
                 .id(),
         )
         .expect("Failed to find commit for HEAD");
+    index
+        .add_frombuffer(&entry, format!("change on {} on {}", trunk.id(), branch).as_ref())
+        .expect("Expected to be able to read from buffer");
+    let sig = git2::Signature::new("User", "user@example.com", &Time::new(0, 0))
+        .expect("Failed to build commit signature");
+    let tree_oid = index.write_tree().expect("Failed to write tree to disk");
+    let tree = repo
+        .find_tree(tree_oid)
+        .expect("Failed to find tree from OID");
     let commit_oid = repo
         .commit(None, &sig, &sig, "Test commit", &tree, &[&trunk])
         .expect("Failed to commit to repo");

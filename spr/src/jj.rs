@@ -126,6 +126,10 @@ impl RevSet {
         o.ancestors().without(&self.ancestors())
     }
 
+    pub fn fork_point(&self, o: &Self) -> Self {
+        RevSet(format!("fork_point(({}) | ({}))", self.0, o.0))
+    }
+
     // Unary
     pub fn ancestors(&self) -> Self {
         RevSet(format!("::({})", self.0))
