@@ -38,12 +38,18 @@ fn do_patch(
     )?;
     message.insert(MessageSection::LastCommit, resolved.to_string());
     let message = build_commit_message(message);
-    let branch = jj.git_repo.find_branch(
+    let base_branch = jj.git_repo.find_branch(
         format!("{}/{}", config.remote_name, config.master_ref.branch_name()).as_str(),
         git2::BranchType::Remote,
     )?;
+    let head_branch = jj.git_repo.find_branch(
+        format!("{}/{}", config.remote_name, branch_name).as_ref(),
+        git2::BranchType::Remote,
+    )?;
     jj.new_revision(
-        Some(RevSet::from_remote_branch(branch, config.remote_name.clone())?.unique()),
+        Some(RevSet::from_remote_branch(base_branch, config.remote_name.clone())?.unique().fork_point(
+            &RevSet::from_remote_branch(head_branch, config.remote_name.clone())?.unique()
+        ).unique()),
         Some(message),
         false,
     )?;
@@ -94,6 +100,7 @@ mod tests {
         let tree_oid = jj
             .get_tree_oid_for_commit(commit_oid)
             .expect("Expected to get tree for commit");
+        let new_main = testing::git::add_commit_and_push_to_remote(&jj.git_repo, "main");
 
         do_patch(
             &jj,
@@ -134,5 +141,16 @@ mod tests {
             Some(&commit_oid.to_string()),
             "Parsed last commit didn't match expected upstream commit"
         );
+        assert_ne!(
+            jj.git_repo
+                .merge_base(
+                    new_main,
+                    jj.resolve_revision_to_commit_id(rev.id.as_ref())
+                        .expect("Failed to find commit for revision")
+                )
+                .expect("Couldn't get merge base"),
+            new_main,
+            "new change was based on HEAD instead of base of commit",
+        )
     }
 }
