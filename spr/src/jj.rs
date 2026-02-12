@@ -89,7 +89,7 @@ impl RevSet {
         }
     }
 
-    pub fn from_remote_branch<S: Display>(b: git2::Branch, r: S) -> Result<Self> {
+    pub fn from_remote_branch<S: Display>(b: &git2::Branch, r: S) -> Result<Self> {
         let name = b.name()?;
         if let Some(name) = name {
             if let Some(name) = name.strip_prefix(&format!("{}/", r)) {
@@ -164,6 +164,13 @@ impl From<&ChangeId> for RevSet {
 impl From<&git2::Commit<'_>> for RevSet {
     fn from(c: &git2::Commit) -> Self {
         RevSet(format!("commit_id({})", c.id().to_string()))
+    }
+}
+
+// For now just trust that this is a commit.
+impl From<&git2::Oid> for RevSet {
+    fn from(c: &git2::Oid) -> Self {
+        RevSet(format!("commit_id({})", c.to_string()))
     }
 }
 

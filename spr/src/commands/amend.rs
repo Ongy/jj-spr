@@ -54,9 +54,39 @@ fn do_amend<I: IntoIterator<Item = (crate::jj::PreparedCommit, Option<PullReques
                     format!("{}/{}", config.remote_name, pull_request.head.branch_name()).as_str(),
                     git2::BranchType::Remote,
                 )?;
+                // When we are based on the main branch, we'll potentially rebase.
+                // This only makes sense for changes on main.
+                if pull_request.base.is_master_branch() {
+                    let main_branch = jj.git_repo.find_branch(
+                        format!("{}/{}", config.remote_name, config.master_ref.branch_name())
+                            .as_str(),
+                        git2::BranchType::Remote,
+                    )?;
+                    let main_revset =
+                        RevSet::from_remote_branch(&main_branch, &config.remote_name)?;
+
+                    let main_head_fork = jj.revset_to_change_id(
+                        &RevSet::from_remote_branch(&head_branch, &config.remote_name)?
+                            .fork_point(&main_revset),
+                    )?;
+                    let main_change_fork = jj
+                        .revset_to_change_id(&RevSet::from(&commit.oid).fork_point(&main_revset))?;
+
+                    let forks_fork = jj.revset_to_change_id(
+                        &RevSet::from(&main_head_fork).fork_point(&RevSet::from(&main_change_fork)),
+                    )?;
+
+                    // I.e. HEAD's base is *ahead* of our base.
+                    // I.e. a user pressed the "merge base into PR" button
+                    // So we should update to also be based on that.
+                    if forks_fork == main_change_fork && main_change_fork != main_head_fork {
+                        jj.rebase_branch(&RevSet::from(&commit.oid), main_head_fork)?;
+                    }
+                }
+
                 jj.squash_copy(
                     &RevSet::from(&base_commit).to(&RevSet::from_remote_branch(
-                        head_branch,
+                        &head_branch,
                         &config.remote_name,
                     )?),
                     crate::jj::ChangeId::from(commit.short_id.clone()),
