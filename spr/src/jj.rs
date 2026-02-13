@@ -668,8 +668,10 @@ impl Jujutsu {
     }
 
     pub fn config_get<S: AsRef<str>>(&self, key: S) -> Result<String> {
-        self.run_ro_captured_with_args(["config", "get", key.as_ref()])
-            .map(|s| s.trim().into())
+        let mut command = Command::new(&self.jj_bin);
+        command.args(["--no-pager", "--quiet", "--ignore-working-copy"]);
+        command.stderr(Stdio::null());
+        self.run_captured_command(command, ["config", "get", key.as_ref()])
     }
 
     #[cfg(test)]

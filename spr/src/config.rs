@@ -7,8 +7,6 @@
 
 use std::collections::HashSet;
 
-use reqwest::Url;
-
 use crate::{error::Result, github::GitHubBranch, utils::slugify};
 
 #[derive(Clone, Debug)]
@@ -146,7 +144,13 @@ pub fn from_jj<F: FnOnce() -> Result<String>>(jj: &crate::jj::Jujutsu, user: F) 
                 ))
             }
         } else if let Some(remote) = remotes.first() {
-            Ok(String::from(*remote))
+            if let Some(name) = remote.split(' ').next() {
+                Ok(String::from(name))
+            } else {
+                Err(crate::error::Error::new(
+                    "Couldn't find name of listed remote",
+                ))
+            }
         } else {
             Err(crate::error::Error::new(
                 "Cannot guess remote. There is none",
@@ -175,10 +179,25 @@ pub fn from_jj<F: FnOnce() -> Result<String>>(jj: &crate::jj::Jujutsu, user: F) 
         .unwrap_or(String::from(""));
 
     let repo_with_owner = value_from_jj(jj, "spr.githubRepository").or_else(|_| {
-        Url::parse(remote_info.as_str()).map(|url| {
-            let path = url.path();
-            String::from(path.strip_suffix(".git").unwrap_or(path))
-        })
+        println!("{}", remote_info);
+        let no_suffix = remote_info
+            .strip_suffix(".git")
+            .unwrap_or(remote_info.as_str());
+        if let Some(index) = no_suffix.find("github.com") {
+            if let Some((_, path)) = no_suffix.split_at_checked(index + "github.com".len() + 1) {
+                Ok(String::from(path))
+            } else {
+                Err(crate::error::Error::new(format!(
+                    "Couldn't split along 'github.com' in {}",
+                    remote_info
+                )))
+            }
+        } else {
+            Err(crate::error::Error::new(format!(
+                "Couldn't find 'github.com' in {}",
+                remote_info
+            )))
+        }
     })?;
     let components: Vec<_> = std::path::Path::new(repo_with_owner.as_str())
         .components()

@@ -129,17 +129,11 @@ pub async fn spr() -> Result<()> {
         .default_headers(headers)
         .build()?;
 
-    let user_fun = || {
-        let octocrab = octocrab::OctocrabBuilder::default()
-            .personal_token(github_auth_token.clone())
-            .build()?;
-        let user = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?
-            .block_on(octocrab.current().user())?;
-        Ok(user.login)           
-    };
-    let config = config::from_jj(&jj, user_fun)?;
+    let octocrab = octocrab::OctocrabBuilder::default()
+        .personal_token(github_auth_token.clone())
+        .build()?;
+    let user = octocrab.current().user().await?;
+    let config = config::from_jj(&jj, || Ok(user.login))?;
     let mut gh = jj_spr::github::GitHub::new(config.clone(), graphql_client.clone());
 
     match cli.command {
