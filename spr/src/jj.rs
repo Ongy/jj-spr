@@ -89,7 +89,7 @@ impl RevSet {
         }
     }
 
-    pub fn from_remote_branch<S: Display>(b: git2::Branch, r: S) -> Result<Self> {
+    pub fn from_remote_branch<S: Display>(b: &git2::Branch, r: S) -> Result<Self> {
         let name = b.name()?;
         if let Some(name) = name {
             if let Some(name) = name.strip_prefix(&format!("{}/", r)) {

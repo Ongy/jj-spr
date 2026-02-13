@@ -47,8 +47,8 @@ fn do_patch(
         git2::BranchType::Remote,
     )?;
     jj.new_revision(
-        Some(RevSet::from_remote_branch(base_branch, config.remote_name.clone())?.unique().fork_point(
-            &RevSet::from_remote_branch(head_branch, config.remote_name.clone())?.unique()
+        Some(RevSet::from_remote_branch(&base_branch, config.remote_name.clone())?.unique().fork_point(
+            &RevSet::from_remote_branch(&head_branch, config.remote_name.clone())?.unique()
         ).unique()),
         Some(message),
         false,
