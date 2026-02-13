@@ -7,6 +7,8 @@
 
 use std::collections::HashSet;
 
+use reqwest::Url;
+
 use crate::{error::Result, github::GitHubBranch, utils::slugify};
 
 #[derive(Clone, Debug)]
@@ -116,6 +118,90 @@ impl Config {
     }
 }
 
+fn value_from_jj<S: AsRef<str> + Copy>(jj: &crate::jj::Jujutsu, key: S) -> Result<String> {
+    jj.config_get(key).or_else(|_| {
+        Ok(String::from(
+            jj.git_repo.config()?.get_str(key.as_ref())?.trim(),
+        ))
+    })
+}
+
+pub fn from_jj<F: FnOnce() -> Result<String>>(jj: &crate::jj::Jujutsu, user: F) -> Result<Config> {
+    let trunk = jj
+        .config_get("revset-aliases.\"trunk()\"")
+        .unwrap_or(String::from(""));
+    let remote_name = value_from_jj(jj, "spr.githubRemoteName").or_else(|_| {
+        let remotes = jj.git_remote_list()?;
+        let remotes: Vec<_> = remotes.lines().collect();
+
+        if remotes.len() > 1 {
+            let parts: Vec<_> = trunk.split('@').collect();
+            if parts.len() <= 2
+                && let Some(remote) = parts.get(1)
+            {
+                Ok(String::from(*remote))
+            } else {
+                Err(crate::error::Error::new(
+                    "Unexpected trunk() alias. Cannot guess which remote is upstream",
+                ))
+            }
+        } else if let Some(remote) = remotes.first() {
+            Ok(String::from(*remote))
+        } else {
+            Err(crate::error::Error::new(
+                "Cannot guess remote. There is none",
+            ))
+        }
+    })?;
+    let master_branch = value_from_jj(jj, "spr.githubMasterBranch").or_else(|_| {
+        let parts: Vec<_> = trunk.split('@').collect();
+        if parts.len() <= 2
+            && let Some(branch) = parts.get(0)
+        {
+            Ok(String::from(*branch))
+        } else {
+            Err(crate::error::Error::new(
+                "Unexpected trunk() alias. Cannot guess which branch is upstream",
+            ))
+        }
+    })?;
+    let branch_prefix =
+        value_from_jj(jj, "spr.branchPrefix").or_else(|_| user().map(|u| format!("spr/{}", u)))?;
+    let remote_info = jj
+        .git_remote_list()?
+        .lines()
+        .find(|line| line.starts_with(&remote_name))
+        .and_then(|s| s.split(' ').last().map(|s| String::from(s)))
+        .unwrap_or(String::from(""));
+
+    let repo_with_owner = value_from_jj(jj, "spr.githubRepository").or_else(|_| {
+        Url::parse(remote_info.as_str()).map(|url| {
+            let path = url.path();
+            String::from(path.strip_suffix(".git").unwrap_or(path))
+        })
+    })?;
+    let components: Vec<_> = std::path::Path::new(repo_with_owner.as_str())
+        .components()
+        .collect();
+    let (owner, repo) = match (
+        components.get(0).and_then(|c| c.as_os_str().to_str()),
+        components.get(1).and_then(|c| c.as_os_str().to_str()),
+    ) {
+        (Some(owner), Some(repo)) => Ok((owner.into(), repo.into())),
+        _ => Err(crate::error::Error::new(
+            "Unexpected string for owner and repo...",
+        )),
+    }?;
+
+    Ok(Config::new(
+        owner,
+        repo,
+        remote_name,
+        master_branch,
+        branch_prefix,
+    ))
+}
+
 pub enum AuthTokenSource {
     Config(String),
     GitHubCLI(String),
@@ -172,26 +258,6 @@ pub fn get_config_value(key: &str, git_config: &git2::Config) -> Option<String> 
 
     // Fall back to git config
     git_config.get_string(key).ok()
-}
-
-pub fn get_config_bool(key: &str, git_config: &git2::Config) -> Option<bool> {
-    // Try jj config first
-    if let Ok(output) = std::process::Command::new("jj")
-        .args(["config", "get", key])
-        .output()
-        && output.status.success()
-        && let Ok(value) = String::from_utf8(output.stdout)
-    {
-        let trimmed = value.trim().to_lowercase();
-        if trimmed == "true" {
-            return Some(true);
-        } else if trimmed == "false" {
-            return Some(false);
-        }
-    }
-
-    // Fall back to git config
-    git_config.get_bool(key).ok()
 }
 
 /// Helper function to set config value in jj (repo-level)

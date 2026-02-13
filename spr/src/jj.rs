@@ -663,6 +663,15 @@ impl Jujutsu {
         self.run_captured_with_args(args).map(|_| {})
     }
 
+    pub fn git_remote_list(&self) -> Result<String> {
+        self.run_ro_captured_with_args(["git", "remote", "list"])
+    }
+
+    pub fn config_get<S: AsRef<str>>(&self, key: S) -> Result<String> {
+        self.run_ro_captured_with_args(["config", "get", key.as_ref()])
+            .map(|s| s.trim().into())
+    }
+
     #[cfg(test)]
     /// Testing only command.
     /// This is a noop except for the side effects of running jj.
