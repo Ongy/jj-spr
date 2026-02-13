@@ -526,7 +526,7 @@ impl Jujutsu {
         } else {
             Err(Error::new(format!(
                 "Revset {:?} returned no revision",
-                revset
+                revset.unique()
             )))
         }
     }
