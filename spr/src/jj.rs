@@ -679,20 +679,11 @@ fn get_jj_bin() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use crate::testing;
+
     use super::*;
     use std::{fs, path::Path};
     use tempfile::TempDir;
-
-    fn create_test_config() -> Config {
-        Config::new(
-            "test_owner".into(),
-            "test_repo".into(),
-            "origin".into(),
-            "main".into(),
-            "spr/test/".into(),
-            false,
-        )
-    }
 
     fn create_jujutsu_test_repo() -> (TempDir, PathBuf) {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -824,7 +815,7 @@ mod tests {
 
     #[test]
     fn test_revision_reading() {
-        let config = create_test_config();
+        let config = testing::config::basic();
         let (_temp_dir, repo_path) = create_jujutsu_test_repo();
 
         // Create some commits
@@ -860,7 +851,7 @@ mod tests {
     #[test]
     fn test_revision_resolution() {
         let (_temp_dir, repo_path) = create_jujutsu_test_repo();
-        let config = create_test_config();
+        let config = testing::config::basic();
 
         // Create some commits
         let _commit1 = create_jujutsu_commit(&repo_path, "First commit", "content1");
@@ -889,7 +880,7 @@ mod tests {
     #[test]
     fn test_commit_range() {
         let (_temp_dir, repo_path) = create_jujutsu_test_repo();
-        let config = create_test_config();
+        let config = testing::config::basic();
 
         // Create multiple commits
         let _commit1 = create_jujutsu_commit(&repo_path, "First commit", "content1");

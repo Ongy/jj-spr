@@ -916,20 +916,11 @@ fn get_jj_bin() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use crate::testing;
+
     use super::*;
     use std::fs;
     use tempfile::TempDir;
-
-    fn create_test_config() -> Config {
-        Config::new(
-            "test_owner".into(),
-            "test_repo".into(),
-            "origin".into(),
-            "main".into(),
-            "spr/test/".into(),
-            false,
-        )
-    }
 
     fn create_test_git_repo() -> (TempDir, git2::Repository) {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -999,7 +990,7 @@ mod tests {
     fn test_lock_and_get_prepared_commits_for_revision_with_no_revision() {
         let (_temp_dir, repo) = create_test_git_repo();
         let git = Git::new(repo).expect("Failed to create Git instance");
-        let config = create_test_config();
+        let config = testing::config::basic();
 
         // Test with no revision - should fall back to normal behavior
         let result = git.lock_and_get_prepared_commits_for_revision(&config, None);
@@ -1021,7 +1012,7 @@ mod tests {
     fn test_lock_and_get_prepared_commits_for_revision_without_jujutsu() {
         let (_temp_dir, repo) = create_test_git_repo();
         let git = Git::new(repo).expect("Failed to create Git instance");
-        let config = create_test_config();
+        let config = testing::config::basic();
 
         // Test with revision but no Jujutsu - should return error
         let result = git.lock_and_get_prepared_commits_for_revision(&config, Some("test_revision"));
@@ -1069,7 +1060,7 @@ mod tests {
     #[test]
     fn test_prepared_commit_creation() {
         let (_temp_dir, repo) = create_test_git_repo();
-        let config = create_test_config();
+        let config = testing::config::basic();
 
         // Create a test commit with SPR metadata before moving repo
         let commit_message =
@@ -1174,7 +1165,7 @@ mod tests {
         #[test]
         fn test_jujutsu_revision_resolution() {
             let (_temp_dir, repo_path) = create_jujutsu_test_repo();
-            let config = create_test_config();
+            let config = testing::config::basic();
 
             // Create some commits
             let _commit1_id = create_jujutsu_commit(&repo_path, "First commit", "content1");
@@ -1211,7 +1202,7 @@ mod tests {
         #[test]
         fn test_jujutsu_revision_with_change_id() {
             let (_temp_dir, repo_path) = create_jujutsu_test_repo();
-            let config = create_test_config();
+            let config = testing::config::basic();
 
             // Create a commit and get its change ID
             let change_id = create_jujutsu_commit(&repo_path, "Test commit", "test content");
@@ -1253,7 +1244,7 @@ mod tests {
         #[test]
         fn test_jujutsu_invalid_revision() {
             let (_temp_dir, repo_path) = create_jujutsu_test_repo();
-            let config = create_test_config();
+            let config = testing::config::basic();
 
             // Create a commit so we have something in the repo
             let _commit_id = create_jujutsu_commit(&repo_path, "Test commit", "test content");
@@ -1276,7 +1267,7 @@ mod tests {
         #[test]
         fn test_jujutsu_multiple_commits() {
             let (_temp_dir, repo_path) = create_jujutsu_test_repo();
-            let config = create_test_config();
+            let config = testing::config::basic();
 
             // Create multiple commits
             let _commit1 = create_jujutsu_commit(&repo_path, "First commit", "content1");
@@ -1317,7 +1308,7 @@ mod tests {
         #[test]
         fn test_jujutsu_fallback_to_normal_behavior() {
             let (_temp_dir, repo_path) = create_jujutsu_test_repo();
-            let config = create_test_config();
+            let config = testing::config::basic();
 
             // Create some commits
             let _commit1 = create_jujutsu_commit(&repo_path, "First commit", "content1");
