@@ -501,17 +501,34 @@ impl Jujutsu {
         Ok(())
     }
 
-    pub fn revset_to_change_id(&self, revset: &RevSet) -> Result<ChangeId> {
+    pub fn revset_to_change_ids(&self, revset: &RevSet) -> Result<Vec<ChangeId>> {
+        // Get commit range using jj
         let output = self.run_ro_captured_with_args([
             "log",
             "--no-graph",
             "-r",
-            revset.unique().as_ref(),
+            revset.as_ref(),
             "--template",
-            "change_id",
+            "change_id ++ \"\\n\"",
         ])?;
 
-        Ok(output.trim().into())
+        let mut revisions: Vec<_> = output.lines().map(|l| ChangeId::from(l.trim())).collect();
+
+        revisions.reverse();
+
+        Ok(revisions)
+    }
+
+    pub fn revset_to_change_id(&self, revset: &RevSet) -> Result<ChangeId> {
+        let ids = self.revset_to_change_ids(&revset.unique())?;
+        if let Some(id) = ids.first() {
+            Ok(id.clone())
+        } else {
+            Err(Error::new(format!(
+                "Revset {:?} returned no revision",
+                revset
+            )))
+        }
     }
 
     pub fn squash_copy(&mut self, revision: &RevSet, onto: ChangeId) -> Result<()> {
