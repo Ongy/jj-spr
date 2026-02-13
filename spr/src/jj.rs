@@ -491,17 +491,14 @@ impl Jujutsu {
         let output = self.run_ro_captured_with_args([
             "log",
             "--no-graph",
+            "--reversed",
             "-r",
             revset.as_ref(),
             "--template",
             "change_id ++ \"\\n\"",
         ])?;
 
-        let mut revisions: Vec<_> = output.lines().map(|l| ChangeId::from(l.trim())).collect();
-
-        revisions.reverse();
-
-        Ok(revisions)
+        Ok(output.lines().map(|l| ChangeId::from(l.trim())).collect())
     }
 
     pub fn revset_to_change_id(&self, revset: &RevSet) -> Result<ChangeId> {
