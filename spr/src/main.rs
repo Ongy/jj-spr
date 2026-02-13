@@ -159,11 +159,11 @@ pub async fn spr() -> Result<()> {
         require_approval,
     );
 
-    let jj = jj_spr::jj::Jujutsu::new(repo)
+    let mut jj = jj_spr::jj::Jujutsu::new(repo)
         .context("could not initialize Jujutsu backend".to_owned())?;
 
     if let Commands::Format(opts) = cli.command {
-        return commands::format::format(opts, &jj, &config).await;
+        return commands::format::format(opts, &mut jj, &config).await;
     }
 
     let github_auth_token = match cli.github_auth_token {
@@ -196,14 +196,16 @@ pub async fn spr() -> Result<()> {
     let mut gh = jj_spr::github::GitHub::new(config.clone(), graphql_client.clone());
 
     match cli.command {
-        Commands::Diff(opts) => commands::diff::diff(opts, &jj, &mut gh, &config).await?,
-        Commands::Land(opts) => commands::land::land(opts, &jj, &mut gh, &config).await?,
-        Commands::Amend(opts) => commands::amend::amend(opts, &jj, &mut gh, &config).await?,
+        Commands::Diff(opts) => commands::diff::diff(opts, &mut jj, &mut gh, &config).await?,
+        Commands::Land(opts) => commands::land::land(opts, &mut jj, &mut gh, &config).await?,
+        Commands::Amend(opts) => commands::amend::amend(opts, &mut jj, &mut gh, &config).await?,
         Commands::List => commands::list::list(graphql_client, &config).await?,
-        Commands::Patch(opts) => commands::patch::patch(opts, &jj, &mut gh, &config).await?,
-        Commands::Close(opts) => commands::close::close(opts, &jj, &mut gh, &config).await?,
-        Commands::Stacked(opts) => commands::stacked::stacked(&jj, &mut gh, &config, opts).await?,
-        Commands::Sync(opts) => commands::sync::sync(&jj, &mut gh, &config, opts).await?,
+        Commands::Patch(opts) => commands::patch::patch(opts, &mut jj, &mut gh, &config).await?,
+        Commands::Close(opts) => commands::close::close(opts, &mut jj, &mut gh, &config).await?,
+        Commands::Stacked(opts) => {
+            commands::stacked::stacked(&mut jj, &mut gh, &config, opts).await?
+        }
+        Commands::Sync(opts) => commands::sync::sync(&mut jj, &mut gh, &config, opts).await?,
         // The following commands are executed above and return from this
         // function before it reaches this match.
         Commands::Init | Commands::Format(_) => (),

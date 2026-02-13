@@ -169,7 +169,7 @@ impl From<&git2::Commit<'_>> for RevSet {
 
 impl Jujutsu {
     pub fn read_revision(&self, config: &Config, id: ChangeId) -> Result<Revision> {
-        let output = self.run_captured_with_args([
+        let output = self.run_ro_captured_with_args([
             "log",
             "--no-graph",
             "-r",
@@ -254,7 +254,7 @@ impl Jujutsu {
 
     pub fn read_revision_range(&self, config: &Config, range: &RevSet) -> Result<Vec<Revision>> {
         // Get commit range using jj
-        let output = self.run_captured_with_args([
+        let output = self.run_ro_captured_with_args([
             "log",
             "--no-graph",
             "-r",
@@ -276,7 +276,7 @@ impl Jujutsu {
         Ok(commits)
     }
 
-    pub fn update_revision_message(&self, rev: &Revision) -> Result<()> {
+    pub fn update_revision_message(&mut self, rev: &Revision) -> Result<()> {
         let new_message = build_commit_message(&rev.message);
 
         self.run_captured_with_args(["describe", "-r", rev.id.as_ref(), "-m", &new_message])
@@ -292,7 +292,7 @@ impl Jujutsu {
     ) -> Result<Vec<PreparedCommit>> {
         // Get commit range using jj
         let operator = if is_inclusive { "::" } else { ".." };
-        let output = self.run_captured_with_args([
+        let output = self.run_ro_captured_with_args([
             "log",
             "--no-graph",
             "-r",
@@ -317,7 +317,7 @@ impl Jujutsu {
         Ok(commits)
     }
 
-    pub fn check_no_uncommitted_changes(&self) -> Result<()> {
+    pub fn check_no_uncommitted_changes(&mut self) -> Result<()> {
         let output = self.run_captured_with_args(["status"])?;
 
         // Check if there are any changes
@@ -414,7 +414,7 @@ impl Jujutsu {
         Ok(index.write_tree_to(&self.git_repo)?)
     }
 
-    pub fn rewrite_commit_messages(&self, commits: &mut [PreparedCommit]) -> Result<()> {
+    pub fn rewrite_commit_messages(&mut self, commits: &mut [PreparedCommit]) -> Result<()> {
         if commits.is_empty() {
             return Ok(());
         }
@@ -471,7 +471,7 @@ impl Jujutsu {
     }
 
     pub fn resolve_revision_to_commit_id(&self, revision: &str) -> Result<Oid> {
-        let output = self.run_captured_with_args([
+        let output = self.run_ro_captured_with_args([
             "log",
             "--no-graph",
             "-r",
@@ -489,20 +489,20 @@ impl Jujutsu {
         })
     }
 
-    pub fn squash(&self) -> Result<()> {
+    pub fn squash(&mut self) -> Result<()> {
         let _ = self.run_captured_with_args(["squash", "--use-destination-message"])?;
 
         Ok(())
     }
 
-    pub fn commit<M: AsRef<str>>(&self, message: M) -> Result<()> {
+    pub fn commit<M: AsRef<str>>(&mut self, message: M) -> Result<()> {
         let _ = self.run_captured_with_args(["commit", "--message", message.as_ref()])?;
 
         Ok(())
     }
 
     pub fn revset_to_change_id(&self, revset: &RevSet) -> Result<ChangeId> {
-        let output = self.run_captured_with_args([
+        let output = self.run_ro_captured_with_args([
             "log",
             "--no-graph",
             "-r",
@@ -514,7 +514,7 @@ impl Jujutsu {
         Ok(output.trim().into())
     }
 
-    pub fn squash_copy(&self, revision: &RevSet, onto: ChangeId) -> Result<()> {
+    pub fn squash_copy(&mut self, revision: &RevSet, onto: ChangeId) -> Result<()> {
         let _ = self.run_captured_with_args([
             "duplicate",
             revision.as_ref(),
@@ -542,7 +542,7 @@ impl Jujutsu {
 
     fn get_change_id_for_commit(&self, commit_oid: Oid) -> Result<String> {
         // Get the change ID for a given commit OID
-        let output = self.run_captured_with_args([
+        let output = self.run_ro_captured_with_args([
             "log",
             "--no-graph",
             "-r",
@@ -554,21 +554,13 @@ impl Jujutsu {
         Ok(output.trim().to_string())
     }
 
-    fn command(&self) -> Command {
-        let mut ret = Command::new(&self.jj_bin);
-        ret.args(["--no-pager", "--quiet"]);
-        ret.current_dir(&self.repo_path);
-
-        ret
-    }
-
-    fn run_captured_with_args<I, S>(&self, args: I) -> Result<String>
+    fn run_captured_command<I, S>(&self, mut command: Command, args: I) -> Result<String>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut command = self.command();
         command.args(args);
+        command.current_dir(&self.repo_path);
         command.stdout(Stdio::piped());
 
         let child = command.spawn().context("jj failed to spawn".to_string())?;
@@ -592,12 +584,32 @@ impl Jujutsu {
         }
     }
 
-    pub fn abandon(&self, revset: &RevSet) -> Result<()> {
+    fn run_ro_captured_with_args<I, S>(&self, args: I) -> Result<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut command = Command::new(&self.jj_bin);
+        command.args(["--no-pager", "--quiet", "--ignore-working-copy"]);
+        self.run_captured_command(command, args)
+    }
+
+    fn run_captured_with_args<I, S>(&mut self, args: I) -> Result<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut command = Command::new(&self.jj_bin);
+        command.args(["--no-pager", "--quiet"]);
+        self.run_captured_command(command, args)
+    }
+
+    pub fn abandon(&mut self, revset: &RevSet) -> Result<()> {
         self.run_captured_with_args(["abandon", revset.as_ref()])
             .map(|_| {})
     }
 
-    pub fn rebase_branch(&self, revset: &RevSet, target: ChangeId) -> Result<()> {
+    pub fn rebase_branch(&mut self, revset: &RevSet, target: ChangeId) -> Result<()> {
         self.run_captured_with_args([
             "rebase",
             "-b",
@@ -608,12 +620,12 @@ impl Jujutsu {
         .map(|_| {})
     }
 
-    pub fn run_git_fetch(&self) -> Result<()> {
+    pub fn run_git_fetch(&mut self) -> Result<()> {
         self.run_captured_with_args(["git", "fetch"]).map(|_| {})
     }
 
     pub fn new_revision<M: AsRef<str>>(
-        &self,
+        &mut self,
         parents: Option<RevSet>,
         message: Option<M>,
         no_edit: bool,
@@ -633,7 +645,7 @@ impl Jujutsu {
     }
 
     pub fn restore<Fr: AsRef<str>, T: AsRef<str>, Fi: AsRef<str>>(
-        &self,
+        &mut self,
         files: Option<Fi>,
         from: Option<Fr>,
         to: Option<T>,
@@ -650,6 +662,15 @@ impl Jujutsu {
         }
 
         self.run_captured_with_args(args).map(|_| {})
+    }
+
+    #[cfg(test)]
+    /// Testing only command.
+    /// This is a noop except for the side effects of running jj.
+    /// I.e. it'll update jj's view of the world.
+    /// This is useful after test setup commands, but otherwise useless.
+    pub fn update(&mut self) -> Result<()> {
+        self.run_captured_with_args(["status"]).map(|_| {})
     }
 }
 
@@ -919,7 +940,7 @@ mod tests {
         let (_temp_dir, repo_path) = create_jujutsu_test_repo();
 
         let git_repo = git2::Repository::open(&repo_path).expect("Failed to open git repository");
-        let jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
+        let mut jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
 
         // Should pass since new repo has no changes
         let result = jj.check_no_uncommitted_changes();

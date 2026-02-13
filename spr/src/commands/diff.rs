@@ -56,7 +56,7 @@ pub struct DiffOptions {
 
 pub async fn diff(
     opts: DiffOptions,
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     gh: &mut crate::github::GitHub,
     config: &crate::config::Config,
 ) -> Result<()> {
