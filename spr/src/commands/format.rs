@@ -29,7 +29,7 @@ pub struct FormatOptions {
 
 pub async fn format(
     opts: FormatOptions,
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
 ) -> Result<()> {
     // Determine revision and whether to use range mode

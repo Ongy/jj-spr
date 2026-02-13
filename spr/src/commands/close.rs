@@ -35,7 +35,7 @@ pub struct CloseOptions {
 
 pub async fn close(
     opts: CloseOptions,
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     gh: &mut crate::github::GitHub,
     config: &crate::config::Config,
 ) -> Result<()> {

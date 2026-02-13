@@ -210,7 +210,7 @@ async fn collect_futures<J, I: IntoIterator<Item = tokio::task::JoinHandle<J>>>(
 }
 
 pub async fn stacked(
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     gh: &mut crate::github::GitHub,
     config: &crate::config::Config,
     opts: StackedOptions,
@@ -310,7 +310,7 @@ mod tests {
     use crate::testing;
     use std::fs;
 
-    fn amend_jujutsu_revision(jj: &crate::jj::Jujutsu, file_content: &str) {
+    fn amend_jujutsu_revision(jj: &mut crate::jj::Jujutsu, file_content: &str) {
         // Create a file
         let file_path = jj
             .git_repo
@@ -323,7 +323,7 @@ mod tests {
     }
 
     fn create_jujutsu_commit(
-        jj: &crate::jj::Jujutsu,
+        jj: &mut crate::jj::Jujutsu,
         message: &str,
         file_content: &str,
     ) -> ChangeId {
@@ -344,13 +344,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_single_on_head() {
-        let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
+        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
         let change = jj
             .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
@@ -385,13 +385,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_pr_on_change() {
-        let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
+        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
         let change = jj
             .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
@@ -415,7 +415,7 @@ mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
 
-        amend_jujutsu_revision(&jj, "file 2");
+        amend_jujutsu_revision(&mut jj, "file 2");
         let _ = handle_revs(
             &testing::config::basic(),
             &jj,
@@ -466,13 +466,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_stack_on_existing() {
-        let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
+        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
         let change = jj
             .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
@@ -496,7 +496,7 @@ mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
 
-        let child_rev = create_jujutsu_commit(&jj, "Test other commit", "file other");
+        let child_rev = create_jujutsu_commit(&mut jj, "Test other commit", "file other");
         let child_change = jj
             .read_revision(&testing::config::basic(), child_rev)
             .expect("Failed to read child revision");
@@ -562,18 +562,18 @@ mod tests {
 
     #[tokio::test]
     async fn stack_multi_in_pr() {
-        let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
+        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
         let change = jj
             .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
 
-        let child_rev = create_jujutsu_commit(&jj, "Test other commit", "file other");
+        let child_rev = create_jujutsu_commit(&mut jj, "Test other commit", "file other");
         let child_change = jj
             .read_revision(&testing::config::basic(), child_rev)
             .expect("Failed to read child revision");
@@ -614,13 +614,13 @@ mod tests {
 
     #[tokio::test]
     async fn no_rebase_when_change_is_not_rebased() {
-        let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
+        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
         let change = jj
             .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");
@@ -647,7 +647,7 @@ mod tests {
         jj.git_repo
             .set_head_detached(trunk_oid)
             .expect("Failed to checkout trunk");
-        let _ = create_jujutsu_commit(&jj, "New head", "file 3");
+        let _ = create_jujutsu_commit(&mut jj, "New head", "file 3");
         let updated_trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -716,13 +716,13 @@ mod tests {
 
     #[tokio::test]
     async fn rebase_to_new_base() {
-        let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
+        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
         let change = jj
             .read_revision(&testing::config::basic(), rev.clone())
             .expect("Failed to read revision");
@@ -749,7 +749,7 @@ mod tests {
         jj.git_repo
             .set_head_detached(trunk_oid)
             .expect("Failed to checkout trunk");
-        let new_trunk = create_jujutsu_commit(&jj, "New head", "file 3");
+        let new_trunk = create_jujutsu_commit(&mut jj, "New head", "file 3");
         let updated_trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -817,18 +817,18 @@ mod tests {
 
     #[tokio::test]
     async fn rebase_stacked_pr() {
-        let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
+        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
         let change = jj
             .read_revision(&testing::config::basic(), rev.clone())
             .expect("Failed to read revision");
 
-        let child_rev = create_jujutsu_commit(&jj, "Test other commit", "file other");
+        let child_rev = create_jujutsu_commit(&mut jj, "Test other commit", "file other");
         let child_change = jj
             .read_revision(&testing::config::basic(), child_rev)
             .expect("Failed to read child revision");
@@ -853,7 +853,7 @@ mod tests {
 
         jj.new_revision(Some(RevSet::from(&rev)), None as Option<&str>, true)
             .expect("Failed to create new revision");
-        amend_jujutsu_revision(&jj, "file 2");
+        amend_jujutsu_revision(&mut jj, "file 2");
         let _ = handle_revs(
             &testing::config::basic(),
             &jj,
@@ -947,13 +947,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_update_without_change() {
-        let (_temp_dir, jj, bare) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&jj, "Test commit", "file 1");
+        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
         let change = jj
             .read_revision(&testing::config::basic(), rev)
             .expect("Failed to read revision");

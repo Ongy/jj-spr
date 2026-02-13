@@ -24,7 +24,7 @@ async fn collect_futures<J, I: IntoIterator<Item = tokio::task::JoinHandle<J>>>(
 }
 
 pub async fn sync(
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     gh: &mut crate::github::GitHub,
     config: &crate::config::Config,
     opts: SyncOpts,

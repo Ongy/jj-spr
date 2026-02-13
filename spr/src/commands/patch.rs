@@ -26,7 +26,7 @@ pub struct PatchOptions {
 }
 
 fn do_patch(
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
     message: &mut MessageSectionsMap,
     branch_name: &str,
@@ -38,18 +38,24 @@ fn do_patch(
     )?;
     message.insert(MessageSection::LastCommit, resolved.to_string());
     let message = build_commit_message(message);
-    let base_branch = jj.git_repo.find_branch(
-        format!("{}/{}", config.remote_name, config.master_ref.branch_name()).as_str(),
-        git2::BranchType::Remote,
-    )?;
-    let head_branch = jj.git_repo.find_branch(
-        format!("{}/{}", config.remote_name, branch_name).as_ref(),
-        git2::BranchType::Remote,
-    )?;
+    let base_revset = {
+        let base_branch = jj.git_repo.find_branch(
+            format!("{}/{}", config.remote_name, config.master_ref.branch_name()).as_str(),
+            git2::BranchType::Remote,
+        )?;
+        RevSet::from_remote_branch(&base_branch, config.remote_name.clone())?.unique()
+    };
+
+    let head_revset = {
+        let head_branch = jj.git_repo.find_branch(
+            format!("{}/{}", config.remote_name, branch_name).as_ref(),
+            git2::BranchType::Remote,
+        )?;
+        RevSet::from_remote_branch(&head_branch, config.remote_name.clone())?.unique()
+    };
+
     jj.new_revision(
-        Some(RevSet::from_remote_branch(&base_branch, config.remote_name.clone())?.unique().fork_point(
-            &RevSet::from_remote_branch(&head_branch, config.remote_name.clone())?.unique()
-        ).unique()),
+        Some(base_revset.fork_point(&head_revset).unique()),
         Some(message),
         false,
     )?;
@@ -68,7 +74,7 @@ fn do_patch(
 
 pub async fn patch(
     opts: PatchOptions,
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     gh: &mut crate::github::GitHub,
     config: &crate::config::Config,
 ) -> Result<()> {
@@ -94,7 +100,7 @@ mod tests {
     #[tokio::test]
     async fn test_single_on_head() {
         let pr_nr = 1;
-        let (_temp_dir, jj, _) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
         let commit_oid =
             testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-branch");
         let tree_oid = jj
@@ -103,7 +109,7 @@ mod tests {
         let new_main = testing::git::add_commit_and_push_to_remote(&jj.git_repo, "main");
 
         do_patch(
-            &jj,
+            &mut jj,
             &testing::config::basic(),
             &mut BTreeMap::from([(
                 MessageSection::PullRequest,

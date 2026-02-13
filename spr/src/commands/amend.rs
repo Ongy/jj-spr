@@ -35,7 +35,7 @@ pub struct AmendOptions {
 
 fn do_amend<I: IntoIterator<Item = (crate::jj::Revision, Option<PullRequest>)>>(
     opts: AmendOptions,
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
     commits: I,
 ) -> Result<()> {
@@ -48,26 +48,32 @@ fn do_amend<I: IntoIterator<Item = (crate::jj::Revision, Option<PullRequest>)>>(
             if opts.pull_code_changes
                 && let Some(old_rev) = revision.message.get(&MessageSection::LastCommit)
             {
-                let base_commit = jj.git_repo.find_commit(git2::Oid::from_str(old_rev)?)?;
-                let head_branch = jj.git_repo.find_branch(
-                    format!("{}/{}", config.remote_name, pull_request.head.branch_name()).as_str(),
-                    git2::BranchType::Remote,
-                )?;
-                // When we are based on the main branch, we'll potentially rebase.
-                // This only makes sense for changes on main.
-                if pull_request.base.is_master_branch() {
-                    let main_branch = jj.git_repo.find_branch(
-                        format!("{}/{}", config.remote_name, config.master_ref.branch_name())
+                let base_revset = {
+                    let base_commit = jj.git_repo.find_commit(git2::Oid::from_str(old_rev)?)?;
+                    RevSet::from(&base_commit)
+                };
+                let head_revset = {
+                    let head_branch = jj.git_repo.find_branch(
+                        format!("{}/{}", config.remote_name, pull_request.head.branch_name())
                             .as_str(),
                         git2::BranchType::Remote,
                     )?;
-                    let main_revset =
-                        RevSet::from_remote_branch(&main_branch, &config.remote_name)?;
+                    RevSet::from_remote_branch(&head_branch, &config.remote_name)?
+                };
+                // When we are based on the main branch, we'll potentially rebase.
+                // This only makes sense for changes on main.
+                if pull_request.base.is_master_branch() {
+                    let main_revset = {
+                        let main_branch = jj.git_repo.find_branch(
+                            format!("{}/{}", config.remote_name, config.master_ref.branch_name())
+                                .as_str(),
+                            git2::BranchType::Remote,
+                        )?;
+                        RevSet::from_remote_branch(&main_branch, &config.remote_name)?
+                    };
 
-                    let main_head_fork = jj.revset_to_change_id(
-                        &RevSet::from_remote_branch(&head_branch, &config.remote_name)?
-                            .fork_point(&main_revset),
-                    )?;
+                    let main_head_fork =
+                        jj.revset_to_change_id(&head_revset.fork_point(&main_revset))?;
                     let main_change_fork = jj.revset_to_change_id(
                         &RevSet::from(&revision.id).fork_point(&main_revset),
                     )?;
@@ -84,13 +90,7 @@ fn do_amend<I: IntoIterator<Item = (crate::jj::Revision, Option<PullRequest>)>>(
                     }
                 }
 
-                jj.squash_copy(
-                    &RevSet::from(&base_commit).to(&RevSet::from_remote_branch(
-                        &head_branch,
-                        &config.remote_name,
-                    )?),
-                    revision.id.clone(),
-                )?;
+                jj.squash_copy(&base_revset.to(&head_revset), revision.id.clone())?;
             }
 
             for (k, v) in pull_request.sections.iter() {
@@ -120,7 +120,7 @@ async fn collect_futures<J, I: IntoIterator<Item = tokio::task::JoinHandle<J>>>(
 
 pub async fn amend(
     opts: AmendOptions,
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     gh: &mut crate::github::GitHub,
     config: &crate::config::Config,
 ) -> Result<()> {
@@ -167,7 +167,7 @@ mod tests {
     use std::fs;
 
     fn create_jujutsu_commit(
-        jj: &crate::jj::Jujutsu,
+        jj: &mut crate::jj::Jujutsu,
         message: &str,
         file_content: &str,
     ) -> ChangeId {
@@ -186,9 +186,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_single_on_head() {
-        let (_temp_dir, jj, _) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
 
-        let _ = create_jujutsu_commit(&jj, "Test commit\n\nLast Commit: My Last Commit", "file 1");
+        let _ = create_jujutsu_commit(
+            &mut jj,
+            "Test commit\n\nLast Commit: My Last Commit",
+            "file 1",
+        );
         let change = jj
             .read_revision(
                 &testing::config::basic(),
@@ -204,7 +208,7 @@ mod tests {
                 revision: None,
                 pull_code_changes: false,
             },
-            &jj,
+            &mut jj,
             &testing::config::basic(),
             [(
                 change.clone(),
@@ -258,14 +262,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_pull_changes_on_head() {
-        let (_temp_dir, jj, _) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
         let rev = create_jujutsu_commit(
-            &jj,
+            &mut jj,
             format!("Test commit\n\nLast Commit: {trunk_oid}").as_str(),
             "file 1",
         );
@@ -291,7 +295,7 @@ mod tests {
                 revision: None,
                 pull_code_changes: true,
             },
-            &jj,
+            &mut jj,
             &testing::config::basic(),
             [(
                 change.clone(),
@@ -353,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn rebase_to_new_head() {
-        let (_temp_dir, jj, _) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
 
         let trunk_oid = jj
             .git_repo
@@ -361,7 +365,7 @@ mod tests {
             .expect("Failed to revparse HEAD");
 
         let rev = create_jujutsu_commit(
-            &jj,
+            &mut jj,
             format!("Test commit\n\nLast Commit: {trunk_oid}").as_str(),
             "file 1",
         );
@@ -371,16 +375,21 @@ mod tests {
 
         let head =
             testing::git::add_commit_on_and_push_to_remote(&jj.git_repo, "main", [trunk_oid]);
-        let head_commit = jj
-            .git_repo
-            .find_commit(head)
-            .expect("Couldn't find commit for head");
+        let head_revset = {
+            let head_commit = jj
+                .git_repo
+                .find_commit(head)
+                .expect("Couldn't find commit for head");
+
+            RevSet::from(&head_commit)
+        };
         let _ = testing::git::add_commit_on_and_push_to_remote(
             &jj.git_repo,
             "spr/test/test-commit",
             [head, trunk_oid],
         );
 
+        jj.update().expect("Expected to be able to update JJ state");
         let _ = do_amend(
             AmendOptions {
                 all: false,
@@ -388,7 +397,7 @@ mod tests {
                 revision: None,
                 pull_code_changes: true,
             },
-            &jj,
+            &mut jj,
             &testing::config::basic(),
             [(
                 change.clone(),
@@ -420,9 +429,7 @@ mod tests {
         .expect("do_amend was not expected to error");
 
         let fork_point = jj
-            .resolve_revision_to_commit_id(
-                RevSet::from(&head_commit).fork_point(&RevSet::from(&rev)).as_ref(),
-            )
+            .resolve_revision_to_commit_id(head_revset.fork_point(&RevSet::from(&rev)).as_ref())
             .expect("Couldn't find fork point of new revision and main commit");
         assert_eq!(
             fork_point, head,
@@ -432,7 +439,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_rebase_to_old_head() {
-        let (_temp_dir, jj, _) = testing::setup::repo_with_origin();
+        let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
 
         let trunk_oid = jj
             .git_repo
@@ -440,7 +447,7 @@ mod tests {
             .expect("Failed to revparse HEAD");
 
         let rev = create_jujutsu_commit(
-            &jj,
+            &mut jj,
             format!("Test commit\n\nLast Commit: {trunk_oid}").as_str(),
             "file 1",
         );
@@ -456,12 +463,17 @@ mod tests {
             [head, trunk_oid],
         );
         let head = testing::git::add_commit_on_and_push_to_remote(&jj.git_repo, "main", [head]);
-        let head_commit = jj
-            .git_repo
-            .find_commit(head)
-            .expect("Couldn't find commit for head");
+        let head_revset = {
+            let head_commit = jj
+                .git_repo
+                .find_commit(head)
+                .expect("Couldn't find commit for head");
+
+            RevSet::from(&head_commit)
+        };
+        jj.update().expect("Expected to be able to update JJ state");
         let head_change = jj
-            .revset_to_change_id(&RevSet::from(&head_commit))
+            .revset_to_change_id(&head_revset)
             .expect("Expected to find change_id for head");
         jj.rebase_branch(&RevSet::from(&rev), head_change)
             .expect("Should be able to rebase rev");
@@ -473,7 +485,7 @@ mod tests {
                 revision: None,
                 pull_code_changes: true,
             },
-            &jj,
+            &mut jj,
             &testing::config::basic(),
             [(
                 change.clone(),
@@ -505,11 +517,7 @@ mod tests {
         .expect("do_amend was not expected to error");
 
         let fork_point = jj
-            .resolve_revision_to_commit_id(
-                RevSet::from(&head_commit)
-                    .fork_point(&RevSet::from(&rev))
-                    .as_ref(),
-            )
+            .resolve_revision_to_commit_id(head_revset.fork_point(&RevSet::from(&rev)).as_ref())
             .expect("Couldn't find fork point of new revision and main commit");
         assert_eq!(fork_point, head, "Revision was rebased to older HEAD")
     }
