@@ -371,6 +371,10 @@ mod tests {
 
         let head =
             testing::git::add_commit_on_and_push_to_remote(&jj.git_repo, "main", [trunk_oid]);
+        let head_commit = jj
+            .git_repo
+            .find_commit(head)
+            .expect("Couldn't find commit for head");
         let _ = testing::git::add_commit_on_and_push_to_remote(
             &jj.git_repo,
             "spr/test/test-commit",
@@ -417,7 +421,7 @@ mod tests {
 
         let fork_point = jj
             .resolve_revision_to_commit_id(
-                RevSet::from(&head).fork_point(&RevSet::from(&rev)).as_ref(),
+                RevSet::from(&head_commit).fork_point(&RevSet::from(&rev)).as_ref(),
             )
             .expect("Couldn't find fork point of new revision and main commit");
         assert_eq!(
@@ -452,8 +456,12 @@ mod tests {
             [head, trunk_oid],
         );
         let head = testing::git::add_commit_on_and_push_to_remote(&jj.git_repo, "main", [head]);
+        let head_commit = jj
+            .git_repo
+            .find_commit(head)
+            .expect("Couldn't find commit for head");
         let head_change = jj
-            .revset_to_change_id(&RevSet::from(&head))
+            .revset_to_change_id(&RevSet::from(&head_commit))
             .expect("Expected to find change_id for head");
         jj.rebase_branch(&RevSet::from(&rev), head_change)
             .expect("Should be able to rebase rev");
@@ -498,12 +506,11 @@ mod tests {
 
         let fork_point = jj
             .resolve_revision_to_commit_id(
-                RevSet::from(&head).fork_point(&RevSet::from(&rev)).as_ref(),
+                RevSet::from(&head_commit)
+                    .fork_point(&RevSet::from(&rev))
+                    .as_ref(),
             )
             .expect("Couldn't find fork point of new revision and main commit");
-        assert_eq!(
-            fork_point, head,
-            "Revision was rebased to older HEAD"
-        )
+        assert_eq!(fork_point, head, "Revision was rebased to older HEAD")
     }
 }

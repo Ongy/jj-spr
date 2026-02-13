@@ -167,13 +167,6 @@ impl From<&git2::Commit<'_>> for RevSet {
     }
 }
 
-// For now just trust that this is a commit.
-impl From<&git2::Oid> for RevSet {
-    fn from(c: &git2::Oid) -> Self {
-        RevSet(format!("commit_id({})", c.to_string()))
-    }
-}
-
 impl Jujutsu {
     pub fn read_revision(&self, config: &Config, id: ChangeId) -> Result<Revision> {
         let output = self.run_captured_with_args([
