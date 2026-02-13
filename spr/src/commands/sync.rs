@@ -4,6 +4,7 @@ use crate::{
     error::Result,
     github::PullRequestState,
     jj::{ChangeId, RevSet},
+    output::output,
 };
 
 #[derive(Debug, clap::Parser)]
@@ -68,9 +69,22 @@ pub async fn sync(
 
         // TODO: Should this only abandon changes of PRs that have been merged?
         if pr.state == PullRequestState::Closed {
+            output(
+                "🛬",
+                format!(
+                    "{} landed. Abandoning {:?}",
+                    config.pull_request_url(pr.number),
+                    rev.id,
+                ),
+            )?;
             jj.abandon(&RevSet::from(&rev.id).unique())?;
         }
     }
+    if jj.revset_to_change_ids(&revset)?.is_empty() {
+        output("👋", "Nothing left to rebase")?;
+        return Ok(());
+    }
+    output("🔁", format!("Going to rebase {:?}", revset))?;
     jj.rebase_branch(
         &revset,
         ChangeId::from(format!(
