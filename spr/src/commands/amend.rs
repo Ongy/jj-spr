@@ -43,7 +43,6 @@ fn do_amend<I: IntoIterator<Item = (crate::jj::Revision, Option<PullRequest>)>>(
     let mut items: Vec<_> = commits.into_iter().collect();
 
     for (revision, pull_request) in items.iter_mut() {
-        // write_commit_title(revision)?;
         if let Some(pull_request) = pull_request {
             // Ok, we want to update our local change with any code changes that were done upstream
             if opts.pull_code_changes
