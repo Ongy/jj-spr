@@ -253,27 +253,12 @@ impl Jujutsu {
     }
 
     pub fn read_revision_range(&self, config: &Config, range: &RevSet) -> Result<Vec<Revision>> {
-        // Get commit range using jj
-        let output = self.run_ro_captured_with_args([
-            "log",
-            "--no-graph",
-            "-r",
-            range.as_ref(),
-            "--template",
-            "change_id ++ \"\\n\"",
-        ])?;
+        let revisions = self.revset_to_change_ids(range)?;
 
-        let mut commits = Vec::new();
-        for line in output.lines() {
-            let line = line.trim();
-            if !line.is_empty() {
-                commits.push(self.read_revision(config, line.into())?);
-            }
-        }
-
-        commits.reverse();
-
-        Ok(commits)
+        revisions
+            .into_iter()
+            .map(|id| self.read_revision(config, id))
+            .collect()
     }
 
     pub fn update_revision_message(&mut self, rev: &Revision) -> Result<()> {
