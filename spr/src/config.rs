@@ -124,7 +124,10 @@ fn value_from_jj<S: AsRef<str> + Copy>(jj: &crate::jj::Jujutsu, key: S) -> Resul
     })
 }
 
-pub fn from_jj<F: FnOnce() -> Result<String>>(jj: &crate::jj::Jujutsu, user: F) -> Result<Config> {
+pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
+    jj: &crate::jj::Jujutsu,
+    user: F,
+) -> Result<Config> {
     let trunk = jj
         .config_get("revset-aliases.\"trunk()\"")
         .unwrap_or(String::from(""));
@@ -169,8 +172,10 @@ pub fn from_jj<F: FnOnce() -> Result<String>>(jj: &crate::jj::Jujutsu, user: F) 
             ))
         }
     })?;
-    let branch_prefix =
-        value_from_jj(jj, "spr.branchPrefix").or_else(|_| user().map(|u| format!("spr/{}", u)))?;
+    let branch_prefix = match value_from_jj(jj, "spr.branchPrefix") {
+        Ok(val) => Ok(val),
+        Err(_) => user().await.map(|u| format!("spr/{}", u)),
+    }?;
     let remote_info = jj
         .git_remote_list()?
         .lines()

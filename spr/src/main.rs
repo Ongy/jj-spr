@@ -128,12 +128,14 @@ pub async fn spr() -> Result<()> {
     let graphql_client = reqwest::Client::builder()
         .default_headers(headers)
         .build()?;
-
-    let octocrab = octocrab::OctocrabBuilder::default()
-        .personal_token(github_auth_token.clone())
-        .build()?;
-    let user = octocrab.current().user().await?;
-    let config = config::from_jj(&jj, || Ok(user.login))?;
+    let user_fun = async || {
+        let octocrab = octocrab::OctocrabBuilder::default()
+            .personal_token(github_auth_token.clone())
+            .build()?;
+        let user = octocrab.current().user().await?;
+        Ok(user.login)
+    };
+    let config = config::from_jj(&jj, user_fun).await?;
     let mut gh = jj_spr::github::GitHub::new(config.clone(), graphql_client.clone());
 
     match cli.command {
