@@ -279,22 +279,8 @@ impl Jujutsu {
     pub fn update_revision_message(&self, rev: &Revision) -> Result<()> {
         let new_message = build_commit_message(&rev.message);
 
-        // Update the commit message using jj describe
-        let mut cmd = Command::new(&self.jj_bin);
-        cmd.args(["describe", "-r", rev.id.as_ref(), "-m", &new_message])
-            .current_dir(&self.repo_path)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let output = cmd.output()?;
-        if !output.status.success() {
-            return Err(Error::new(format!(
-                "Failed to update commit message: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-
-        Ok(())
+        self.run_captured_with_args(["describe", "-r", rev.id.as_ref(), "-m", &new_message])
+            .map(|_| {})
     }
 
     pub fn get_prepared_commits_from_to(
@@ -446,19 +432,8 @@ impl Jujutsu {
             let change_id = self.get_change_id_for_commit(prepared_commit.oid)?;
 
             // Update the commit message using jj describe
-            let mut cmd = Command::new(&self.jj_bin);
-            cmd.args(["describe", "-r", &change_id, "-m", &new_message])
-                .current_dir(&self.repo_path)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-
-            let output = cmd.output()?;
-            if !output.status.success() {
-                return Err(Error::new(format!(
-                    "Failed to update commit message: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                )));
-            }
+            let _ =
+                self.run_captured_with_args(["describe", "-r", &change_id, "-m", &new_message])?;
 
             // Reset the flag after successful update
             prepared_commit.message_changed = false;
@@ -515,24 +490,13 @@ impl Jujutsu {
     }
 
     pub fn squash(&self) -> Result<()> {
-        let _ = self.run_captured_with_args([
-            "squash",
-            "--no-pager",
-            "--quiet",
-            "--use-destination-message",
-        ])?;
+        let _ = self.run_captured_with_args(["squash", "--use-destination-message"])?;
 
         Ok(())
     }
 
     pub fn commit<M: AsRef<str>>(&self, message: M) -> Result<()> {
-        let _ = self.run_captured_with_args([
-            "commit",
-            "--quiet",
-            "--no-pager",
-            "--message",
-            message.as_ref(),
-        ])?;
+        let _ = self.run_captured_with_args(["commit", "--message", message.as_ref()])?;
 
         Ok(())
     }
@@ -553,11 +517,9 @@ impl Jujutsu {
     pub fn squash_copy(&self, revision: &RevSet, onto: ChangeId) -> Result<()> {
         let _ = self.run_captured_with_args([
             "duplicate",
-            "--no-pager",
             revision.as_ref(),
             "--destination",
             onto.id.as_str(),
-            "--quiet",
             "--config",
             format!(
                 "templates.duplicate_description='''\"jj-spr-duplicate-for-{}\"'''",
@@ -568,12 +530,10 @@ impl Jujutsu {
 
         let _ = self.run_captured_with_args([
             "squash",
-            "--no-pager",
             "--into",
             onto.id.as_str(),
             "--from",
             format!("description(exact:\"jj-spr-duplicate-for-{}\")", onto.id).as_str(),
-            "--quiet",
             "--use-destination-message",
         ])?;
 
@@ -594,14 +554,21 @@ impl Jujutsu {
         Ok(output.trim().to_string())
     }
 
+    fn command(&self) -> Command {
+        let mut ret = Command::new(&self.jj_bin);
+        ret.args(["--no-pager", "--quiet"]);
+        ret.current_dir(&self.repo_path);
+
+        ret
+    }
+
     fn run_captured_with_args<I, S>(&self, args: I) -> Result<String>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut command = Command::new(&self.jj_bin);
+        let mut command = self.command();
         command.args(args);
-        command.current_dir(&self.repo_path);
         command.stdout(Stdio::piped());
 
         let child = command.spawn().context("jj failed to spawn".to_string())?;
@@ -626,36 +593,23 @@ impl Jujutsu {
     }
 
     pub fn abandon(&self, revset: &RevSet) -> Result<()> {
-        std::process::Command::new("jj")
-            .args(["abandon", revset.as_ref()])
-            .current_dir(self.repo_path.as_path())
-            .status()?;
-
-        Ok(())
+        self.run_captured_with_args(["abandon", revset.as_ref()])
+            .map(|_| {})
     }
 
     pub fn rebase_branch(&self, revset: &RevSet, target: ChangeId) -> Result<()> {
-        std::process::Command::new("jj")
-            .args([
-                "rebase",
-                "-b",
-                revset.as_ref(),
-                "--destination",
-                target.as_ref(),
-            ])
-            .current_dir(self.repo_path.as_path())
-            .status()?;
-
-        Ok(())
+        self.run_captured_with_args([
+            "rebase",
+            "-b",
+            revset.as_ref(),
+            "--destination",
+            target.as_ref(),
+        ])
+        .map(|_| {})
     }
 
     pub fn run_git_fetch(&self) -> Result<()> {
-        std::process::Command::new("jj")
-            .args(["git", "fetch"])
-            .current_dir(self.repo_path.as_path())
-            .status()?;
-
-        Ok(())
+        self.run_captured_with_args(["git", "fetch"]).map(|_| {})
     }
 
     pub fn new_revision<M: AsRef<str>>(
@@ -674,12 +628,8 @@ impl Jujutsu {
         if no_edit {
             args.push("--no-edit")
         }
-        std::process::Command::new("jj")
-            .args(args)
-            .current_dir(self.repo_path.as_path())
-            .status()?;
 
-        Ok(())
+        self.run_captured_with_args(args).map(|_| {})
     }
 
     pub fn restore<Fr: AsRef<str>, T: AsRef<str>, Fi: AsRef<str>>(
@@ -699,12 +649,7 @@ impl Jujutsu {
             args.push(files.as_ref());
         }
 
-        std::process::Command::new("jj")
-            .args(args)
-            .current_dir(self.repo_path.as_path())
-            .status()?;
-
-        Ok(())
+        self.run_captured_with_args(args).map(|_| {})
     }
 }
 
