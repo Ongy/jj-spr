@@ -179,7 +179,6 @@ pub fn from_jj<F: FnOnce() -> Result<String>>(jj: &crate::jj::Jujutsu, user: F) 
         .unwrap_or(String::from(""));
 
     let repo_with_owner = value_from_jj(jj, "spr.githubRepository").or_else(|_| {
-        println!("{}", remote_info);
         let no_suffix = remote_info
             .strip_suffix(".git")
             .unwrap_or(remote_info.as_str());
