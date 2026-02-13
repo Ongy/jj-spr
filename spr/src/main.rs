@@ -57,16 +57,6 @@ enum Commands {
     /// Pull state from github and merge into local pull requests
     Sync(commands::sync::SyncOpts),
 
-    /// Create a new or update an existing Pull Request on GitHub from the
-    /// current HEAD commit
-    Diff(commands::diff::DiffOptions),
-
-    /// Reformat commit message
-    Format(commands::format::FormatOptions),
-
-    /// Land a reviewed Pull Request
-    Land(commands::land::LandOptions),
-
     /// Update local commit message with content on GitHub
     Amend(commands::amend::AmendOptions),
 
@@ -75,9 +65,6 @@ enum Commands {
 
     /// Create a new branch with the contents of an existing Pull Request
     Patch(commands::patch::PatchOptions),
-
-    /// Close a Pull request
-    Close(commands::close::CloseOptions),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -162,10 +149,6 @@ pub async fn spr() -> Result<()> {
     let mut jj = jj_spr::jj::Jujutsu::new(repo)
         .context("could not initialize Jujutsu backend".to_owned())?;
 
-    if let Commands::Format(opts) = cli.command {
-        return commands::format::format(opts, &mut jj, &config).await;
-    }
-
     let github_auth_token = match cli.github_auth_token {
         Some(v) => v,
         None => get_auth_token(&git_config)
@@ -196,19 +179,16 @@ pub async fn spr() -> Result<()> {
     let mut gh = jj_spr::github::GitHub::new(config.clone(), graphql_client.clone());
 
     match cli.command {
-        Commands::Diff(opts) => commands::diff::diff(opts, &mut jj, &mut gh, &config).await?,
-        Commands::Land(opts) => commands::land::land(opts, &mut jj, &mut gh, &config).await?,
         Commands::Amend(opts) => commands::amend::amend(opts, &mut jj, &mut gh, &config).await?,
         Commands::List => commands::list::list(graphql_client, &config).await?,
         Commands::Patch(opts) => commands::patch::patch(opts, &mut jj, &mut gh, &config).await?,
-        Commands::Close(opts) => commands::close::close(opts, &mut jj, &mut gh, &config).await?,
         Commands::Stacked(opts) => {
             commands::stacked::stacked(&mut jj, &mut gh, &config, opts).await?
         }
         Commands::Sync(opts) => commands::sync::sync(&mut jj, &mut gh, &config, opts).await?,
         // The following commands are executed above and return from this
         // function before it reaches this match.
-        Commands::Init | Commands::Format(_) => (),
+        Commands::Init => (),
     };
 
     Ok::<_, Error>(())

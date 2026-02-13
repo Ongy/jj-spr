@@ -72,9 +72,7 @@ fn test_help_shows_jujutsu_subcommand_identity() {
     );
 
     // Should list all main commands
-    let commands = vec![
-        "diff", "format", "land", "amend", "close", "list", "patch", "init",
-    ];
+    let commands = vec!["amend", "list", "patch", "init"];
     for cmd in commands {
         assert!(stdout.contains(cmd), "Help should mention {} command", cmd);
     }
@@ -83,11 +81,7 @@ fn test_help_shows_jujutsu_subcommand_identity() {
 #[test]
 fn test_subcommands_have_help() {
     let commands = vec![
-        ("diff", "Pull Request"),
-        ("format", "commit message"),
-        ("land", "Pull Request"),
         ("amend", "commit message"),
-        ("close", "Pull request"),
         ("list", "Pull Requests"),
         ("patch", "branch"),
         ("init", "assistant"),
@@ -203,107 +197,9 @@ fn test_accepts_jujutsu_repository() {
     );
 }
 
-#[test]
-fn test_configuration_detection() {
-    let (_temp_dir, repo_path) = create_jj_repo();
-
-    // Without configuration, should fail with config-related error
-    let output = run_jj_spr(&["format"], Some(&repo_path));
-    assert!(
-        !output.status.success(),
-        "Should fail without configuration"
-    );
-
-    let all_output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // Should mention configuration requirement
-    assert!(
-        all_output.contains("config")
-            || all_output.contains("githubRepository")
-            || all_output.contains("not found"),
-        "Should mention configuration requirement"
-    );
-}
-
-#[test]
-fn test_revision_parameter_is_recognized() {
-    let (_temp_dir, repo_path) = create_jj_repo();
-
-    // Test that revision parameter is recognized (even if command fails later)
-    let output = run_jj_spr(&["format", "--revision", "@"], Some(&repo_path));
-
-    let all_output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // Should NOT fail due to unrecognized argument
-    assert!(
-        !all_output.contains("unrecognized") && !all_output.contains("invalid argument"),
-        "Should recognize --revision parameter"
-    );
-}
-
-#[test]
-fn test_global_revision_parameter() {
-    let (_temp_dir, repo_path) = create_jj_repo();
-
-    // Test global revision parameter
-    let output = run_jj_spr(&["--revision", "@", "format"], Some(&repo_path));
-
-    let all_output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // Should NOT fail due to argument parsing
-    assert!(
-        !all_output.contains("unrecognized") && !all_output.contains("invalid argument"),
-        "Should recognize global --revision parameter"
-    );
-}
-
 // ============================================================================
 // BEHAVIORAL TESTS - Test that commands behave as expected
 // ============================================================================
-
-#[test]
-fn test_commands_fail_appropriately_without_config() {
-    let (_temp_dir, repo_path) = create_jj_repo();
-
-    // These commands should all fail without GitHub configuration
-    let github_commands = vec!["diff", "format", "land", "amend", "close"];
-
-    for cmd in github_commands {
-        let output = run_jj_spr(&[cmd], Some(&repo_path));
-        assert!(
-            !output.status.success(),
-            "Command {} should fail without config",
-            cmd
-        );
-
-        // Should fail due to configuration, not other reasons
-        let all_output = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        assert!(
-            all_output.contains("config")
-                || all_output.contains("not found")
-                || all_output.contains("githubRepository"),
-            "Command {} should fail due to missing configuration",
-            cmd
-        );
-    }
-}
 
 #[test]
 fn test_list_command_behavior() {
@@ -352,22 +248,7 @@ fn test_jj_spr_integration_summary() {
     assert!(!output.status.success());
     println!("✅ Rejects non-Jujutsu repositories");
 
-    // 4. Accepts Jujutsu repositories
-    let (_temp_dir, repo_path) = create_jj_repo();
-    let output = run_jj_spr(&["format"], Some(&repo_path));
-    let all_output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(!all_output.contains("This command requires a Jujutsu repository"));
-    println!("✅ Accepts Jujutsu repositories");
-
-    // 5. Configuration system works
-    assert!(all_output.contains("config") || all_output.contains("not found"));
-    println!("✅ Configuration system functional");
-
-    // 6. Command structure works
+    // 4. Command structure works
     let output = run_jj_spr(&["--help"], None);
     assert!(output.status.success());
     println!("✅ Command structure functional");
