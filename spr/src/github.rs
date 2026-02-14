@@ -569,18 +569,7 @@ pub trait GHPullRequest {
     fn sections(&self) -> &MessageSectionsMap;
 }
 
-//    pub async fn create_pull_request(
-//        &self,
-//        message: &MessageSectionsMap,
-//        base_ref_name: String,
-//        head_ref_name: String,
-//        draft: bool,
-//    ) -> Result<PullRequest> {
-
 pub trait GitHubAdapter {
-    //    fn get_user(
-    //        &mut self,
-    //    ) -> impl std::future::Future<Output = crate::error::Result<String>> + Send;
     type PRAdapter: Send;
 
     fn pull_request(
