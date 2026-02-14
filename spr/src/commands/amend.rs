@@ -7,6 +7,7 @@
 
 use crate::{
     error::{Error, Result},
+    github::PullRequest,
     jj::RevSet,
     message::{MessageSection, validate_commit_message},
     output::output,
@@ -32,14 +33,7 @@ pub struct AmendOptions {
     pull_code_changes: bool,
 }
 
-fn do_amend<
-    I: IntoIterator<
-        Item = (
-            crate::jj::Revision,
-            Option<impl crate::github::GHPullRequest>,
-        ),
-    >,
->(
+fn do_amend<I: IntoIterator<Item = (crate::jj::Revision, Option<PullRequest>)>>(
     opts: AmendOptions,
     jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
@@ -60,7 +54,7 @@ fn do_amend<
                 };
                 let head_revset = {
                     let head_branch = jj.git_repo.find_branch(
-                        format!("{}/{}", config.remote_name, pull_request.head_branch_name())
+                        format!("{}/{}", config.remote_name, pull_request.head.branch_name())
                             .as_str(),
                         git2::BranchType::Remote,
                     )?;
@@ -68,7 +62,7 @@ fn do_amend<
                 };
                 // When we are based on the main branch, we'll potentially rebase.
                 // This only makes sense for changes on main.
-                if pull_request.base_branch_name() == config.master_ref.branch_name() {
+                if pull_request.base.is_master_branch() {
                     let main_revset = {
                         let main_branch = jj.git_repo.find_branch(
                             format!("{}/{}", config.remote_name, config.master_ref.branch_name())
@@ -99,7 +93,7 @@ fn do_amend<
                 jj.squash_copy(&base_revset.to(&head_revset), revision.id.clone())?;
             }
 
-            for (k, v) in pull_request.sections().iter() {
+            for (k, v) in pull_request.sections.iter() {
                 revision.message.insert(*k, v.clone());
             }
         }
@@ -113,16 +107,23 @@ fn do_amend<
     if failure { Err(Error::empty()) } else { Ok(()) }
 }
 
-pub async fn amend<GH, PR>(
+async fn collect_futures<J, I: IntoIterator<Item = tokio::task::JoinHandle<J>>>(
+    it: I,
+) -> Result<Vec<J>> {
+    let iterator = it.into_iter();
+    let mut results = Vec::with_capacity(iterator.size_hint().0);
+    for handle in iterator {
+        results.push(handle.await?);
+    }
+    Ok(results)
+}
+
+pub async fn amend(
     opts: AmendOptions,
     jj: &mut crate::jj::Jujutsu,
-    mut gh: GH,
+    gh: &mut crate::github::GitHub,
     config: &crate::config::Config,
-) -> Result<()>
-where
-    PR: crate::github::GHPullRequest,
-    GH: crate::github::GitHubAdapter<PRAdapter = PR>,
-{
+) -> Result<()> {
     let revisions = jj.read_revision_range(
         config,
         &RevSet::current()
@@ -135,16 +136,23 @@ where
         return Ok(());
     }
 
-    let pull_requests = gh
-        .pull_requests(revisions.iter().map(|r| r.pull_request_number))
-        .await?;
+    #[allow(clippy::needless_collect)]
+    let pull_requests: Result<Vec<_>> =
+        collect_futures(revisions.iter().map(|r: &crate::jj::Revision| {
+            let gh = gh.clone();
+            let pr_num = r.pull_request_number;
+            tokio::spawn(async move {
+                match pr_num {
+                    Some(number) => gh.get_pull_request(number).await.map(|v| Some(v)),
+                    None => Ok(None),
+                }
+            })
+        }))
+        .await?
+        .into_iter()
+        .collect();
 
-    do_amend(
-        opts,
-        jj,
-        config,
-        std::iter::zip(revisions, pull_requests.into_iter()),
-    )
+    do_amend(opts, jj, config, std::iter::zip(revisions, pull_requests?))
 }
 
 #[cfg(test)]
