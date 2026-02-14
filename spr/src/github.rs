@@ -562,6 +562,181 @@ impl GitHubBranch {
     }
 }
 
+pub trait GHPullRequest {
+    fn head_branch_name(&self) -> &str;
+    fn base_branch_name(&self) -> &str;
+    fn pr_number(&self) -> u64;
+    fn sections(&self) -> &MessageSectionsMap;
+}
+
+pub trait GitHubAdapter {
+    //    fn get_user(
+    //        &mut self,
+    //    ) -> impl std::future::Future<Output = crate::error::Result<String>> + Send;
+    type PRAdapter: Send;
+
+    fn pull_request(
+        &mut self,
+        number: u64,
+    ) -> impl std::future::Future<Output = crate::error::Result<Self::PRAdapter>> + Send;
+
+    fn pull_requests<I>(
+        &mut self,
+        numbers: I,
+    ) -> impl std::future::Future<Output = crate::error::Result<Vec<Option<Self::PRAdapter>>>>
+    where
+        I: IntoIterator<Item = Option<u64>>,
+    {
+        async {
+            let mut ret = Vec::new();
+
+            for number in numbers.into_iter() {
+                ret.push(match number {
+                    Some(number) => Some(self.pull_request(number).await?),
+                    None => None,
+                });
+            }
+            Ok(ret)
+        }
+    }
+}
+
+impl GHPullRequest for PullRequest {
+    fn head_branch_name(&self) -> &str {
+        self.head.branch_name()
+    }
+
+    fn base_branch_name(&self) -> &str {
+        self.base.branch_name()
+    }
+
+    fn pr_number(&self) -> u64 {
+        self.number
+    }
+
+    fn sections(&self) -> &MessageSectionsMap {
+        &self.sections
+    }
+}
+
+impl GitHubAdapter for &mut GitHub {
+    type PRAdapter = PullRequest;
+    async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
+        self.clone().get_pull_request(number).await
+    }
+
+    async fn pull_requests<I>(
+        &mut self,
+        numbers: I,
+    ) -> crate::error::Result<Vec<Option<Self::PRAdapter>>>
+    where
+        I: IntoIterator<Item = Option<u64>>,
+    {
+        let pull_requests = numbers.into_iter().map(|number| {
+            let gh = self.clone();
+            tokio::spawn(async move {
+                match number {
+                    Some(number) => gh.get_pull_request(number).await.map(|v| Some(v)),
+                    None => Ok(None),
+                }
+            })
+        });
+
+        let mut ret = Vec::new();
+        for pr in pull_requests {
+            ret.push(pr.await??);
+        }
+
+        Ok(ret)
+    }
+}
+
+#[cfg(test)]
+pub mod fakes {
+    use crate::message::MessageSectionsMap;
+
+    #[derive(Debug, Clone)]
+    pub struct PullRequest {
+        pub base: String,
+        pub head: String,
+        pub number: u64,
+        pub sections: MessageSectionsMap,
+    }
+
+    impl super::GHPullRequest for PullRequest {
+        fn head_branch_name(&self) -> &str {
+            self.head.as_ref()
+        }
+
+        fn base_branch_name(&self) -> &str {
+            self.base.as_ref()
+        }
+
+        fn pr_number(&self) -> u64 {
+            self.number
+        }
+
+        fn sections(&self) -> &MessageSectionsMap {
+            &self.sections
+        }
+    }
+
+    pub struct GitHub {
+        pub pull_requests: std::collections::BTreeMap<u64, PullRequest>,
+    }
+
+    impl super::GitHubAdapter for GitHub {
+        type PRAdapter = PullRequest;
+        async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
+            self.pull_requests
+                .get(&number)
+                .map_or(Err(crate::error::Error::new("No such PR")), |pr| {
+                    Ok(pr.clone())
+                })
+        }
+    }
+
+    impl super::GitHubAdapter for &mut GitHub {
+        type PRAdapter = PullRequest;
+        async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
+            self.pull_requests
+                .get(&number)
+                .map_or(Err(crate::error::Error::new("No such PR")), |pr| {
+                    Ok(pr.clone())
+                })
+        }
+
+        async fn new_pull_request<H, B>(
+            &mut self,
+            message: &MessageSectionsMap,
+            base_ref_name: B,
+            head_ref_name: H,
+            _: bool,
+        ) -> crate::error::Result<Self::PRAdapter>
+        where
+            H: AsRef<str>,
+            B: AsRef<str>,
+        {
+            let max = self
+                .pull_requests
+                .iter()
+                .map(|(k, _)| *k)
+                .max()
+                .unwrap_or(0);
+            let pr = Self::PRAdapter {
+                number: max + 1,
+                base: String::from(base_ref_name.as_ref()),
+                head: String::from(head_ref_name.as_ref()),
+                sections: message.clone(),
+            };
+
+            self.pull_requests.insert(pr.number, pr.clone());
+
+            Ok(pr)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.
