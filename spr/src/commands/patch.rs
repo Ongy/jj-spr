@@ -28,7 +28,7 @@ pub struct PatchOptions {
 fn do_patch(
     jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
-    message: &mut MessageSectionsMap,
+    message: &MessageSectionsMap,
     branch_name: &str,
 ) -> Result<()> {
     jj.run_git_fetch()?;
@@ -36,8 +36,10 @@ fn do_patch(
     let resolved = jj.resolve_reference(
         format!("refs/remotes/{}/{}", config.remote_name, branch_name).as_str(),
     )?;
+
+    let mut message = message.clone();
     message.insert(MessageSection::LastCommit, resolved.to_string());
-    let message = build_commit_message(message);
+    let message = build_commit_message(&message);
     let base_revset = {
         let base_branch = jj.git_repo.find_branch(
             format!("{}/{}", config.remote_name, config.master_ref.branch_name()).as_str(),
@@ -72,30 +74,31 @@ fn do_patch(
     Ok(())
 }
 
-pub async fn patch(
+pub async fn patch<GH, PR>(
     opts: PatchOptions,
     jj: &mut crate::jj::Jujutsu,
-    gh: &mut crate::github::GitHub,
+    mut gh: GH,
     config: &crate::config::Config,
-) -> Result<()> {
-    let mut pr = gh.clone().get_pull_request(opts.pull_request).await?;
+) -> Result<()>
+where
+    PR: crate::github::GHPullRequest,
+    GH: crate::github::GitHubAdapter<PRAdapter = PR>,
+{
+    let pr = gh.pull_request(opts.pull_request).await?;
 
-    if !pr.base.is_master_branch() {
+    if pr.base_branch_name() != config.master_ref.branch_name() {
         return Err(Error::new(format!(
             "Specified PR {} is not based on the target branch. Adopting stacked PRs is not yet supported",
-            pr.number
+            pr.pr_number()
         )));
     }
 
-    do_patch(jj, config, &mut pr.sections, pr.head.branch_name())
+    do_patch(jj, config, pr.sections(), pr.head_branch_name())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use super::do_patch;
-    use crate::{jj::RevSet, message::MessageSection, testing};
+    use crate::{commands::patch::PatchOptions, jj::RevSet, message::MessageSection, testing};
 
     #[tokio::test]
     async fn test_single_on_head() {
@@ -108,16 +111,31 @@ mod tests {
             .expect("Expected to get tree for commit");
         let new_main = testing::git::add_commit_and_push_to_remote(&jj.git_repo, "main");
 
-        do_patch(
+        super::patch(
+            PatchOptions {
+                pull_request: 1,
+                branch_name: None,
+                no_checkout: true,
+            },
             &mut jj,
+            crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::from([(
+                    1,
+                    crate::github::fakes::PullRequest {
+                        number: 1,
+                        base: String::from("main"),
+                        head: String::from("spr/test/test-branch"),
+                        sections: std::collections::BTreeMap::from([(
+                            MessageSection::PullRequest,
+                            testing::config::basic().pull_request_url(pr_nr),
+                        )]),
+                    },
+                )]),
+            },
             &testing::config::basic(),
-            &mut BTreeMap::from([(
-                MessageSection::PullRequest,
-                testing::config::basic().pull_request_url(pr_nr),
-            )]),
-            "spr/test/test-branch",
         )
-        .expect("Do not expect do_patch to fail.");
+        .await
+        .expect("patch() should not fail");
 
         let change = jj
             .revset_to_change_id(&RevSet::current())
