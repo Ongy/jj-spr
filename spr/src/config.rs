@@ -174,7 +174,7 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
     })?;
     let branch_prefix = match value_from_jj(jj, "spr.branchPrefix") {
         Ok(val) => Ok(val),
-        Err(_) => user().await.map(|u| format!("spr/{}", u)),
+        Err(_) => user().await.map(|u| format!("spr/{}/", u)),
     }?;
     let remote_info = jj
         .git_remote_list()?
@@ -509,7 +509,7 @@ mod tests {
             assert_eq!(config.repo, "jj-spr", "Failed to guess repo name");
             assert_eq!(config.remote_name, "origin", "Failed to guess remote name");
             assert_eq!(
-                config.branch_prefix, "spr/user",
+                config.branch_prefix, "spr/user/",
                 "Failed to build default branch prefix"
             );
             assert_eq!(
@@ -540,7 +540,7 @@ mod tests {
             assert_eq!(config.repo, "jj-spr", "Failed to guess repo name");
             assert_eq!(config.remote_name, "mine", "Failed to guess remote name");
             assert_eq!(
-                config.branch_prefix, "spr/user",
+                config.branch_prefix, "spr/user/",
                 "Failed to build default branch prefix"
             );
             assert_eq!(
