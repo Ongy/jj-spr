@@ -569,6 +569,14 @@ pub trait GHPullRequest {
     fn sections(&self) -> &MessageSectionsMap;
 }
 
+//    pub async fn create_pull_request(
+//        &self,
+//        message: &MessageSectionsMap,
+//        base_ref_name: String,
+//        head_ref_name: String,
+//        draft: bool,
+//    ) -> Result<PullRequest> {
+
 pub trait GitHubAdapter {
     //    fn get_user(
     //        &mut self,
@@ -579,6 +587,17 @@ pub trait GitHubAdapter {
         &mut self,
         number: u64,
     ) -> impl std::future::Future<Output = crate::error::Result<Self::PRAdapter>> + Send;
+
+    fn new_pull_request<H, B>(
+        &mut self,
+        message: &MessageSectionsMap,
+        base_ref_name: B,
+        head_ref_name: H,
+        draft: bool,
+    ) -> impl std::future::Future<Output = crate::error::Result<Self::PRAdapter>>
+    where
+        H: AsRef<str>,
+        B: AsRef<str>;
 
     fn pull_requests<I>(
         &mut self,
@@ -649,6 +668,26 @@ impl GitHubAdapter for &mut GitHub {
 
         Ok(ret)
     }
+
+    async fn new_pull_request<H, B>(
+        &mut self,
+        message: &MessageSectionsMap,
+        base_ref_name: B,
+        head_ref_name: H,
+        draft: bool,
+    ) -> crate::error::Result<Self::PRAdapter>
+    where
+        H: AsRef<str>,
+        B: AsRef<str>,
+    {
+        self.create_pull_request(
+            message,
+            String::from(base_ref_name.as_ref()),
+            String::from(head_ref_name.as_ref()),
+            draft,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -693,6 +732,35 @@ pub mod fakes {
                 .map_or(Err(crate::error::Error::new("No such PR")), |pr| {
                     Ok(pr.clone())
                 })
+        }
+
+        async fn new_pull_request<H, B>(
+            &mut self,
+            message: &MessageSectionsMap,
+            base_ref_name: B,
+            head_ref_name: H,
+            _: bool,
+        ) -> crate::error::Result<Self::PRAdapter>
+        where
+            H: AsRef<str>,
+            B: AsRef<str>,
+        {
+            let max = self
+                .pull_requests
+                .iter()
+                .map(|(k, _)| *k)
+                .max()
+                .unwrap_or(0);
+            let pr = Self::PRAdapter {
+                number: max + 1,
+                base: String::from(base_ref_name.as_ref()),
+                head: String::from(head_ref_name.as_ref()),
+                sections: message.clone(),
+            };
+
+            self.pull_requests.insert(pr.number, pr.clone());
+
+            Ok(pr)
         }
     }
 
