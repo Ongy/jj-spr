@@ -12,7 +12,7 @@
 use clap::{Parser, Subcommand};
 use jj_spr::{
     commands,
-    config::{get_auth_token, get_config_value},
+    config::{self, get_auth_token},
     error::{Error, Result, ResultExt},
     output::output,
 };
@@ -99,51 +99,6 @@ pub async fn spr() -> Result<()> {
 
     let git_config = repo.config()?;
 
-    // Try to get config from jj first, fall back to git config
-    let github_repository = match cli.github_repository {
-        Some(v) => Ok(v),
-        None => {
-            // Try jj config first
-            if let Ok(output) = std::process::Command::new("jj")
-                .args(["config", "get", "spr.githubRepository"])
-                .output()
-            {
-                if output.status.success() {
-                    Ok(String::from_utf8(output.stdout)?.trim().to_string())
-                } else {
-                    git_config.get_string("spr.githubRepository")
-                }
-            } else {
-                git_config.get_string("spr.githubRepository")
-            }
-        }
-    }?;
-
-    let (github_owner, github_repo) = {
-        let captures = lazy_regex::regex!(r#"^([\w\-\.]+)/([\w\-\.]+)$"#)
-            .captures(&github_repository)
-            .ok_or_else(|| OptionsError::InvalidRepository(github_repository.clone()))?;
-        (
-            captures.get(1).unwrap().as_str().to_string(),
-            captures.get(2).unwrap().as_str().to_string(),
-        )
-    };
-
-    let github_remote_name = get_config_value("spr.githubRemoteName", &git_config)
-        .unwrap_or_else(|| "origin".to_string());
-    let github_master_branch = get_config_value("spr.githubMasterBranch", &git_config)
-        .unwrap_or_else(|| "main".to_string());
-    let branch_prefix = get_config_value("spr.branchPrefix", &git_config)
-        .ok_or_else(|| Error::new("spr.branchPrefix must be configured".to_string()))?;
-
-    let config = jj_spr::config::Config::new(
-        github_owner,
-        github_repo,
-        github_remote_name,
-        github_master_branch,
-        branch_prefix,
-    );
-
     let mut jj = jj_spr::jj::Jujutsu::new(repo)
         .context("could not initialize Jujutsu backend".to_owned())?;
 
@@ -173,7 +128,14 @@ pub async fn spr() -> Result<()> {
     let graphql_client = reqwest::Client::builder()
         .default_headers(headers)
         .build()?;
-
+    let user_fun = async || {
+        let octocrab = octocrab::OctocrabBuilder::default()
+            .personal_token(github_auth_token.clone())
+            .build()?;
+        let user = octocrab.current().user().await?;
+        Ok(user.login)
+    };
+    let config = config::from_jj(&jj, user_fun).await?;
     let mut gh = jj_spr::github::GitHub::new(config.clone(), graphql_client.clone());
 
     match cli.command {

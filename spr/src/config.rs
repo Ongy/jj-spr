@@ -116,6 +116,115 @@ impl Config {
     }
 }
 
+fn value_from_jj<S: AsRef<str> + Copy>(jj: &crate::jj::Jujutsu, key: S) -> Result<String> {
+    jj.config_get(key).or_else(|_| {
+        Ok(String::from(
+            jj.git_repo.config()?.get_str(key.as_ref())?.trim(),
+        ))
+    })
+}
+
+pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
+    jj: &crate::jj::Jujutsu,
+    user: F,
+) -> Result<Config> {
+    let trunk = jj
+        .config_get("revset-aliases.\"trunk()\"")
+        .unwrap_or(String::from(""));
+    let remote_name = value_from_jj(jj, "spr.githubRemoteName").or_else(|_| {
+        let remotes = jj.git_remote_list()?;
+        let remotes: Vec<_> = remotes.lines().collect();
+
+        if remotes.len() > 1 {
+            let parts: Vec<_> = trunk.split('@').collect();
+            if parts.len() <= 2
+                && let Some(remote) = parts.get(1)
+            {
+                Ok(String::from(*remote))
+            } else {
+                Err(crate::error::Error::new(
+                    "Unexpected trunk() alias. Cannot guess which remote is upstream",
+                ))
+            }
+        } else if let Some(remote) = remotes.first() {
+            if let Some(name) = remote.split(' ').next() {
+                Ok(String::from(name))
+            } else {
+                Err(crate::error::Error::new(
+                    "Couldn't find name of listed remote",
+                ))
+            }
+        } else {
+            Err(crate::error::Error::new(
+                "Cannot guess remote. There is none",
+            ))
+        }
+    })?;
+    let master_branch = value_from_jj(jj, "spr.githubMasterBranch").or_else(|_| {
+        let parts: Vec<_> = trunk.split('@').collect();
+        if parts.len() <= 2
+            && let Some(branch) = parts.get(0)
+        {
+            Ok(String::from(*branch))
+        } else {
+            Err(crate::error::Error::new(
+                "Unexpected trunk() alias. Cannot guess which branch is upstream",
+            ))
+        }
+    })?;
+    let branch_prefix = match value_from_jj(jj, "spr.branchPrefix") {
+        Ok(val) => Ok(val),
+        Err(_) => user().await.map(|u| format!("spr/{}/", u)),
+    }?;
+    let remote_info = jj
+        .git_remote_list()?
+        .lines()
+        .find(|line| line.starts_with(&remote_name))
+        .and_then(|s| s.split(' ').last().map(|s| String::from(s)))
+        .unwrap_or(String::from(""));
+
+    let repo_with_owner = value_from_jj(jj, "spr.githubRepository").or_else(|_| {
+        let no_suffix = remote_info
+            .strip_suffix(".git")
+            .unwrap_or(remote_info.as_str());
+        if let Some(index) = no_suffix.find("github.com") {
+            if let Some((_, path)) = no_suffix.split_at_checked(index + "github.com".len() + 1) {
+                Ok(String::from(path))
+            } else {
+                Err(crate::error::Error::new(format!(
+                    "Couldn't split along 'github.com' in {}",
+                    remote_info
+                )))
+            }
+        } else {
+            Err(crate::error::Error::new(format!(
+                "Couldn't find 'github.com' in {}",
+                remote_info
+            )))
+        }
+    })?;
+    let components: Vec<_> = std::path::Path::new(repo_with_owner.as_str())
+        .components()
+        .collect();
+    let (owner, repo) = match (
+        components.get(0).and_then(|c| c.as_os_str().to_str()),
+        components.get(1).and_then(|c| c.as_os_str().to_str()),
+    ) {
+        (Some(owner), Some(repo)) => Ok((owner.into(), repo.into())),
+        _ => Err(crate::error::Error::new(
+            "Unexpected string for owner and repo...",
+        )),
+    }?;
+
+    Ok(Config::new(
+        owner,
+        repo,
+        remote_name,
+        master_branch,
+        branch_prefix,
+    ))
+}
+
 pub enum AuthTokenSource {
     Config(String),
     GitHubCLI(String),
@@ -172,26 +281,6 @@ pub fn get_config_value(key: &str, git_config: &git2::Config) -> Option<String> 
 
     // Fall back to git config
     git_config.get_string(key).ok()
-}
-
-pub fn get_config_bool(key: &str, git_config: &git2::Config) -> Option<bool> {
-    // Try jj config first
-    if let Ok(output) = std::process::Command::new("jj")
-        .args(["config", "get", key])
-        .output()
-        && output.status.success()
-        && let Ok(value) = String::from_utf8(output.stdout)
-    {
-        let trimmed = value.trim().to_lowercase();
-        if trimmed == "true" {
-            return Some(true);
-        } else if trimmed == "false" {
-            return Some(false);
-        }
-    }
-
-    // Fall back to git config
-    git_config.get_bool(key).ok()
 }
 
 /// Helper function to set config value in jj (repo-level)
@@ -396,5 +485,114 @@ mod tests {
             gh.parse_pull_request_field("https://github.com/acme/codez/pull/123#abc"),
             Some(123)
         );
+    }
+
+    mod from_jj {
+        use crate::testing;
+
+        #[tokio::test]
+        async fn basic() {
+            let (_tmpdir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.git_remote_remove("origin")
+                .expect("Failed to remove origin");
+            jj.git_remote_add("origin", "git@github.com/Ongy/jj-spr.git")
+                .expect("Failed to add origin");
+            jj.config_set("revset-aliases.\"trunk()\"", "main@origin", false)
+                .expect("Failed to set trunk alias.");
+
+            let config = super::from_jj(&jj, async || Ok(String::from("user")))
+                .await
+                .expect("Failed to guess config from jj");
+
+            assert_eq!(config.owner, "Ongy", "Failed to guess owner of repo");
+            assert_eq!(config.repo, "jj-spr", "Failed to guess repo name");
+            assert_eq!(config.remote_name, "origin", "Failed to guess remote name");
+            assert_eq!(
+                config.branch_prefix, "spr/user/",
+                "Failed to build default branch prefix"
+            );
+            assert_eq!(
+                config.master_ref.branch_name(),
+                "main",
+                "Failed to guess default target branch"
+            );
+        }
+
+        #[tokio::test]
+        async fn multi_remote() {
+            let (_tmpdir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.git_remote_remove("origin")
+                .expect("Failed to remove origin");
+            jj.git_remote_add("origin", "git@github.com/Ongy/jj-spr.git")
+                .expect("Failed to add origin");
+            jj.git_remote_add("mine", "git@github.com/user/jj-spr.git")
+                .expect("Failed to add mine remote");
+            jj.config_set("revset-aliases.\"trunk()\"", "dev@mine", false)
+                .expect("Failed to set trunk alias.");
+
+            let config = super::from_jj(&jj, async || Ok(String::from("user")))
+                .await
+                .expect("Failed to guess config from jj");
+
+            assert_eq!(config.owner, "user", "Failed to guess owner of repo");
+            assert_eq!(config.repo, "jj-spr", "Failed to guess repo name");
+            assert_eq!(config.remote_name, "mine", "Failed to guess remote name");
+            assert_eq!(
+                config.branch_prefix, "spr/user/",
+                "Failed to build default branch prefix"
+            );
+            assert_eq!(
+                config.master_ref.branch_name(),
+                "dev",
+                "Failed to guess default target branch"
+            );
+        }
+
+        #[tokio::test]
+        async fn prefers_config() {
+            let (_tmpdir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.git_remote_remove("origin")
+                .expect("Failed to remove origin");
+            jj.git_remote_add("origin", "git@github.com/Ongy/jj-spr.git")
+                .expect("Failed to add origin");
+            jj.git_remote_add("my-remote", "git@github.com/Ongy/jj-spr.git")
+                .expect("Failed to add origin");
+            jj.config_set("revset-aliases.\"trunk()\"", "main@origin", false)
+                .expect("Failed to set trunk alias.");
+
+            jj.config_set("spr.branchPrefix", "my-prefix", false)
+                .expect("Failed to set branch prefix config");
+            jj.config_set("spr.githubRemoteName", "my-remote", false)
+                .expect("Failed to set remote config");
+            jj.config_set("spr.githubMasterBranch", "branch", false)
+                .expect("Failed to set target branch config");
+
+            let config = super::from_jj(&jj, async || {
+                Err(crate::error::Error::new(
+                    "Shouldn't be called when the branch prefix isn't constructed",
+                ))
+            })
+            .await
+            .expect("Failed to guess config from jj");
+
+            assert_eq!(config.owner, "Ongy", "Failed to guess owner of repo");
+            assert_eq!(config.repo, "jj-spr", "Failed to guess repo name");
+            assert_eq!(
+                config.remote_name, "my-remote",
+                "Failed to read remote from config"
+            );
+            assert_eq!(
+                config.branch_prefix, "my-prefix",
+                "Failed to read branch prefix from config"
+            );
+            assert_eq!(
+                config.master_ref.branch_name(),
+                "branch",
+                "Failed to read target branch from config"
+            );
+        }
     }
 }
