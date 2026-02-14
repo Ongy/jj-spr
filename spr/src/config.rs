@@ -304,7 +304,6 @@ pub fn set_jj_config(key: &str, value: &str, repo_path: &std::path::Path) -> Res
 
 #[cfg(test)]
 mod tests {
-
     // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
 
