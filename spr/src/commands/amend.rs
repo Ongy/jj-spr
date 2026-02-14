@@ -149,7 +149,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::do_amend;
     use crate::{
         commands::amend::AmendOptions,
         jj::{ChangeId, RevSet},
@@ -179,21 +178,20 @@ mod tests {
     #[tokio::test]
     async fn test_single_on_head() {
         let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+        let config = testing::config::basic();
+        let pr_url = config.pull_request_url(1);
 
         let _ = create_jujutsu_commit(
             &mut jj,
-            "Test commit\n\nLast Commit: My Last Commit",
+            format!(
+                "Test commit\n\n\nPull Request: {}\nLast Commit: My Last Commit",
+                pr_url,
+            )
+            .as_ref(),
             "file 1",
         );
-        let change = jj
-            .read_revision(
-                &testing::config::basic(),
-                jj.revset_to_change_id(&RevSet::current().parent())
-                    .expect("Failed to get changeid of parent"),
-            )
-            .expect("Failed to prepare commit");
 
-        let _ = do_amend(
+        super::amend(
             AmendOptions {
                 all: false,
                 base: None,
@@ -201,35 +199,24 @@ mod tests {
                 pull_code_changes: false,
             },
             &mut jj,
-            &testing::config::basic(),
-            [(
-                change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from("New Title"),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::from([
-                        (MessageSection::Summary, "New Summary".into()),
-                        (MessageSection::Title, "New Title".into()),
-                    ]),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "main", "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            )],
+            crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::from([(
+                    1,
+                    crate::github::fakes::PullRequest {
+                        number: 1,
+                        sections: std::collections::BTreeMap::from([
+                            (MessageSection::Summary, "New Summary".into()),
+                            (MessageSection::Title, "New Title".into()),
+                        ]),
+                        base: String::from("main"),
+                        head: String::from("spr/test/test-commit"),
+                    },
+                )]),
+            },
+            &config,
         )
-        .expect("do_amend was not expected to error");
+        .await
+        .expect("amend should not error");
 
         // Reread the changed commit so we can check whether it was updated
         let change = jj
@@ -255,6 +242,9 @@ mod tests {
     #[tokio::test]
     async fn test_pull_changes_on_head() {
         let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+        let config = testing::config::basic();
+        let pr_url = config.pull_request_url(1);
+
         let trunk_oid = jj
             .git_repo
             .refname_to_id("HEAD")
@@ -262,12 +252,9 @@ mod tests {
 
         let rev = create_jujutsu_commit(
             &mut jj,
-            format!("Test commit\n\nLast Commit: {trunk_oid}").as_str(),
+            format!("Test commit\n\n\nPull Request: {pr_url}\nLast Commit: {trunk_oid}",).as_str(),
             "file 1",
         );
-        let change = jj
-            .read_revision(&testing::config::basic(), rev.clone())
-            .expect("Failed to prepare commit");
         let pre_amend_tree = jj
             .get_tree_oid_for_commit(
                 jj.resolve_revision_to_commit_id(rev.as_ref())
@@ -280,43 +267,32 @@ mod tests {
             .expect("Expected to be able to checkout trunk");
         testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-commit");
 
-        let _ = do_amend(
+        super::amend(
             AmendOptions {
                 all: false,
                 base: None,
-                revision: None,
+                revision: Some(rev.as_ref().into()),
                 pull_code_changes: true,
             },
             &mut jj,
-            &testing::config::basic(),
-            [(
-                change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from("New Title"),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::from([
-                        (MessageSection::Summary, "New Summary".into()),
-                        (MessageSection::Title, "New Title".into()),
-                    ]),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "main", "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            )],
+            crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::from([(
+                    1,
+                    crate::github::fakes::PullRequest {
+                        number: 1,
+                        sections: std::collections::BTreeMap::from([
+                            (MessageSection::Summary, "New Summary".into()),
+                            (MessageSection::Title, "New Title".into()),
+                        ]),
+                        base: String::from("main"),
+                        head: String::from("spr/test/test-commit"),
+                    },
+                )]),
+            },
+            &config,
         )
-        .expect("do_amend was not expected to error");
+        .await
+        .expect("amend should not error");
 
         // Reread the changed commit so we can check whether it was updated
         let change = jj
@@ -350,6 +326,8 @@ mod tests {
     #[tokio::test]
     async fn rebase_to_new_head() {
         let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+        let config = testing::config::basic();
+        let pr_url = config.pull_request_url(1);
 
         let trunk_oid = jj
             .git_repo
@@ -358,12 +336,9 @@ mod tests {
 
         let rev = create_jujutsu_commit(
             &mut jj,
-            format!("Test commit\n\nLast Commit: {trunk_oid}").as_str(),
+            format!("Test commit\n\n\nPull Request: {pr_url}\nLast Commit: {trunk_oid}",).as_str(),
             "file 1",
         );
-        let change = jj
-            .read_revision(&testing::config::basic(), rev.clone())
-            .expect("Failed to prepare commit");
 
         let head =
             testing::git::add_commit_on_and_push_to_remote(&jj.git_repo, "main", [trunk_oid]);
@@ -382,43 +357,32 @@ mod tests {
         );
 
         jj.update().expect("Expected to be able to update JJ state");
-        let _ = do_amend(
+        super::amend(
             AmendOptions {
                 all: false,
                 base: None,
-                revision: None,
+                revision: Some(rev.as_ref().into()),
                 pull_code_changes: true,
             },
             &mut jj,
-            &testing::config::basic(),
-            [(
-                change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from("New Title"),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::from([
-                        (MessageSection::Summary, "New Summary".into()),
-                        (MessageSection::Title, "New Title".into()),
-                    ]),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "main", "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            )],
+            crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::from([(
+                    1,
+                    crate::github::fakes::PullRequest {
+                        number: 1,
+                        sections: std::collections::BTreeMap::from([
+                            (MessageSection::Summary, "New Summary".into()),
+                            (MessageSection::Title, "New Title".into()),
+                        ]),
+                        base: String::from("main"),
+                        head: String::from("spr/test/test-commit"),
+                    },
+                )]),
+            },
+            &config,
         )
-        .expect("do_amend was not expected to error");
+        .await
+        .expect("amend should not error");
 
         let fork_point = jj
             .resolve_revision_to_commit_id(head_revset.fork_point(&RevSet::from(&rev)).as_ref())
@@ -432,6 +396,8 @@ mod tests {
     #[tokio::test]
     async fn no_rebase_to_old_head() {
         let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+        let config = testing::config::basic();
+        let pr_url = config.pull_request_url(1);
 
         let trunk_oid = jj
             .git_repo
@@ -440,12 +406,9 @@ mod tests {
 
         let rev = create_jujutsu_commit(
             &mut jj,
-            format!("Test commit\n\nLast Commit: {trunk_oid}").as_str(),
+            format!("Test commit\n\n\nPull Request: {pr_url}\nLast Commit: {trunk_oid}",).as_str(),
             "file 1",
         );
-        let change = jj
-            .read_revision(&testing::config::basic(), rev.clone())
-            .expect("Failed to prepare commit");
 
         let head =
             testing::git::add_commit_on_and_push_to_remote(&jj.git_repo, "main", [trunk_oid]);
@@ -470,43 +433,32 @@ mod tests {
         jj.rebase_branch(&RevSet::from(&rev), head_change)
             .expect("Should be able to rebase rev");
 
-        let _ = do_amend(
+        super::amend(
             AmendOptions {
                 all: false,
                 base: None,
-                revision: None,
+                revision: Some(rev.as_ref().into()),
                 pull_code_changes: true,
             },
             &mut jj,
-            &testing::config::basic(),
-            [(
-                change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from("New Title"),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::from([
-                        (MessageSection::Summary, "New Summary".into()),
-                        (MessageSection::Title, "New Title".into()),
-                    ]),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "main", "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            )],
+            crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::from([(
+                    1,
+                    crate::github::fakes::PullRequest {
+                        number: 1,
+                        sections: std::collections::BTreeMap::from([
+                            (MessageSection::Summary, "New Summary".into()),
+                            (MessageSection::Title, "New Title".into()),
+                        ]),
+                        base: String::from("main"),
+                        head: String::from("spr/test/test-commit"),
+                    },
+                )]),
+            },
+            &config,
         )
-        .expect("do_amend was not expected to error");
+        .await
+        .expect("amend should not error");
 
         let fork_point = jj
             .resolve_revision_to_commit_id(head_revset.fork_point(&RevSet::from(&rev)).as_ref())
