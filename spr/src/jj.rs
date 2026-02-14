@@ -667,11 +667,44 @@ impl Jujutsu {
         self.run_ro_captured_with_args(["git", "remote", "list"])
     }
 
+    pub fn git_remote_remove<S>(&mut self, remote: S) -> Result<()>
+    where
+        S: AsRef<str>,
+    {
+        self.run_captured_with_args(["git", "remote", "remove", remote.as_ref()])
+            .map(|_| {})
+    }
+
+    pub fn git_remote_add<S, Su>(&mut self, remote: S, url: Su) -> Result<()>
+    where
+        S: AsRef<str>,
+        Su: AsRef<str>,
+    {
+        self.run_captured_with_args(["git", "remote", "add", remote.as_ref(), url.as_ref()])
+            .map(|_| {})
+    }
+
+    pub fn config_set<K, V>(&mut self, key: K, value: V, user: bool) -> Result<()>
+    where
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        self.run_captured_with_args([
+            "config",
+            "set",
+            if user { "--user" } else { "--repo" },
+            key.as_ref(),
+            value.as_ref(),
+        ])
+        .map(|_| {})
+    }
+
     pub fn config_get<S: AsRef<str>>(&self, key: S) -> Result<String> {
         let mut command = Command::new(&self.jj_bin);
         command.args(["--no-pager", "--quiet", "--ignore-working-copy"]);
         command.stderr(Stdio::null());
         self.run_captured_command(command, ["config", "get", key.as_ref()])
+            .map(|v| v.trim().into())
     }
 
     #[cfg(test)]
