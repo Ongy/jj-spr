@@ -19,6 +19,15 @@ pub fn add_commit_on_and_push_to_remote<B: Display, I: IntoIterator<Item = Oid> 
     branch: B,
     parents: I,
 ) -> Oid {
+    add_commit_on_and_push_to_remote_file(repo, branch, parents, "test.txt")
+}
+
+pub fn add_commit_on_and_push_to_remote_file<B: Display, I: IntoIterator<Item = Oid> + Debug>(
+    repo: &git2::Repository,
+    branch: B,
+    parents: I,
+    path: &str,
+) -> Oid {
     let mut index = repo.index().expect("Couldn't get index from git repo");
     let entry = git2::IndexEntry {
         ctime: IndexTime::new(0, 0),
@@ -32,7 +41,7 @@ pub fn add_commit_on_and_push_to_remote<B: Display, I: IntoIterator<Item = Oid> 
         id: Oid::zero(),
         flags: 0,
         flags_extended: 0,
-        path: Vec::from("test.txt".as_bytes()),
+        path: Vec::from(path.as_bytes()),
     };
     index
         .add_frombuffer(
