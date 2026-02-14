@@ -1,6 +1,5 @@
 use crate::{
     error::{Error, Result, ResultExt},
-    github::PullRequest,
     jj::RevSet,
     message::{MessageSection, build_github_body},
     output::output,
@@ -132,18 +131,22 @@ struct BranchAction {
     existing_nr: Option<u64>,
 }
 
-async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullRequest>)>>(
+async fn handle_revs<I, PR>(
     config: &crate::config::Config,
     jj: &crate::jj::Jujutsu,
     opts: &StackedOptions,
     revisions: I,
     trunk_oid: Oid,
-) -> Result<Vec<BranchAction>> {
+) -> Result<Vec<BranchAction>>
+where
+    PR: crate::github::GHPullRequest,
+    I: IntoIterator<Item = (crate::jj::Revision, Option<PR>)>,
+{
     // ChangeID, head branch, base branch, existing pr
     let mut seen: Vec<BranchAction> = Vec::new();
     for (mut revision, maybe_pr) in revisions.into_iter() {
         let head_ref: String = if let Some(ref pr) = maybe_pr {
-            pr.head.branch_name().into()
+            pr.head_branch_name().into()
         } else {
             // We have to come up with something...
             let title = revision
@@ -154,10 +157,10 @@ async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullReq
             config.get_new_branch_name(&jj.get_all_ref_names()?, title)
         };
         let base_ref = if let Some(ref pr) = maybe_pr {
-            if pr.base.is_master_branch() {
+            if pr.base_branch_name() == config.master_ref.branch_name() {
                 Some(trunk_oid.to_string())
             } else {
-                Some(pr.base.local().into())
+                Some(format!("{}/{}", config.remote_name, pr.base_branch_name()))
             }
         } else if let Some(ba) = seen
             .iter()
@@ -192,29 +195,22 @@ async fn handle_revs<I: IntoIterator<Item = (crate::jj::Revision, Option<PullReq
                         .map(|s| s.into())
                 })
                 .unwrap_or(config.master_ref.branch_name().to_string()),
-            existing_nr: maybe_pr.map(|pr| pr.number),
+            existing_nr: maybe_pr.map(|pr| pr.pr_number()),
         });
     }
     Ok(seen)
 }
 
-async fn collect_futures<J, I: IntoIterator<Item = tokio::task::JoinHandle<J>>>(
-    it: I,
-) -> Result<Vec<J>> {
-    let iterator = it.into_iter();
-    let mut results = Vec::with_capacity(iterator.size_hint().0);
-    for handle in iterator {
-        results.push(handle.await?);
-    }
-    Ok(results)
-}
-
-pub async fn stacked(
+pub async fn stacked<GH, PR>(
     jj: &mut crate::jj::Jujutsu,
-    gh: &mut crate::github::GitHub,
+    mut gh: GH,
     config: &crate::config::Config,
     opts: StackedOptions,
-) -> Result<()> {
+) -> Result<()>
+where
+    PR: crate::github::GHPullRequest,
+    GH: crate::github::GitHubAdapter<PRAdapter = PR>,
+{
     // Get revisions to process
     // The pattern builds:
     // * ::@: Every ancestor of the current revision (including the current reveision)
@@ -249,23 +245,11 @@ pub async fn stacked(
         return Ok(());
     }?;
 
-    #[allow(clippy::needless_collect)]
-    let pull_requests: Result<Vec<_>> =
-        collect_futures(revisions.iter().map(|r: &crate::jj::Revision| {
-            let gh = gh.clone();
-            let pr_num = r.pull_request_number;
-            tokio::spawn(async move {
-                match pr_num {
-                    Some(number) => gh.get_pull_request(number).await.map(|v| Some(v)),
-                    None => Ok(None),
-                }
-            })
-        }))
-        .await?
-        .into_iter()
-        .collect();
+    let pull_requests = gh
+        .pull_requests(revisions.iter().map(|r| r.pull_request_number))
+        .await?;
 
-    let actions = handle_revs(config, jj, &opts, zip(revisions, pull_requests?), trunk_oid).await?;
+    let actions = handle_revs(config, jj, &opts, zip(revisions, pull_requests), trunk_oid).await?;
     for mut action in actions.into_iter() {
         // We don't know what to do with these yet...
         if let Some(_) = action.existing_nr {
@@ -275,20 +259,21 @@ pub async fn stacked(
         }
 
         let pr = gh
-            .create_pull_request(
+            .new_pull_request(
                 &action.revision.message,
                 action.base_branch,
                 action.head_branch,
                 false,
             )
             .await?;
-        let pull_request_url = config.pull_request_url(pr.number);
+        let pull_request_url = config.pull_request_url(pr.pr_number());
 
         output(
             "✨",
             &format!(
                 "Created new Pull Request #{}: {}",
-                pr.number, &pull_request_url,
+                pr.pr_number(),
+                &pull_request_url,
             ),
         )?;
 
@@ -305,7 +290,6 @@ pub async fn stacked(
 
 #[cfg(test)]
 mod tests {
-    use super::handle_revs;
     use crate::jj::{ChangeId, RevSet};
     use crate::testing;
     use std::fs;
@@ -350,21 +334,21 @@ mod tests {
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let change = jj
-            .read_revision(&testing::config::basic(), rev)
-            .expect("Failed to read revision");
-        let _ = handle_revs(
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+        let gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::stacked(
+            &mut jj,
+            gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(change.clone(), None)],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
 
         // Validate the initial push looks good
         let pr_branch = bare
@@ -386,26 +370,21 @@ mod tests {
     #[tokio::test]
     async fn test_update_pr_on_change() {
         let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
-        let trunk_oid = jj
-            .git_repo
-            .refname_to_id("HEAD")
-            .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let change = jj
-            .read_revision(&testing::config::basic(), rev)
-            .expect("Failed to read revision");
-        let _ = handle_revs(
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(change.clone(), None)],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -416,39 +395,17 @@ mod tests {
             .expect("Failed to get oid from pr branch");
 
         amend_jujutsu_revision(&mut jj, "file 2");
-        let _ = handle_revs(
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(
-                change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from(""),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::new(),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "main", "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            )],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
+
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
             .expect("Expected to find branch on bare upstream");
@@ -467,26 +424,20 @@ mod tests {
     #[tokio::test]
     async fn test_stack_on_existing() {
         let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
-        let trunk_oid = jj
-            .git_repo
-            .refname_to_id("HEAD")
-            .expect("Failed to revparse HEAD");
-
-        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let change = jj
-            .read_revision(&testing::config::basic(), rev)
-            .expect("Failed to read revision");
-        let _ = handle_revs(
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(change.clone(), None)],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -496,46 +447,18 @@ mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
 
-        let child_rev = create_jujutsu_commit(&mut jj, "Test other commit", "file other");
-        let child_change = jj
-            .read_revision(&testing::config::basic(), child_rev)
-            .expect("Failed to read child revision");
-        let _ = handle_revs(
+        let _ = create_jujutsu_commit(&mut jj, "Test other commit", "file other");
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [
-                (
-                    change.clone(),
-                    Some(crate::github::PullRequest {
-                        number: 1,
-                        state: crate::github::PullRequestState::Open,
-                        title: String::from(""),
-                        body: None,
-                        base_oid: git2::Oid::zero(),
-                        sections: std::collections::BTreeMap::new(),
-                        base: crate::github::GitHubBranch::new_from_branch_name(
-                            "main", "origin", "main",
-                        ),
-                        head_oid: git2::Oid::zero(),
-                        head: crate::github::GitHubBranch::new_from_branch_name(
-                            "spr/test/test-commit",
-                            "origin",
-                            "main",
-                        ),
-                        merge_commit: None,
-                        reviewers: std::collections::HashMap::new(),
-                        review_status: None,
-                    }),
-                ),
-                (child_change.clone(), None),
-            ],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
+
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
             .expect("Expected to find branch on bare upstream");
@@ -568,26 +491,22 @@ mod tests {
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let change = jj
-            .read_revision(&testing::config::basic(), rev)
-            .expect("Failed to read revision");
-
-        let child_rev = create_jujutsu_commit(&mut jj, "Test other commit", "file other");
-        let child_change = jj
-            .read_revision(&testing::config::basic(), child_rev)
-            .expect("Failed to read child revision");
-        let _ = handle_revs(
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+        let _ = create_jujutsu_commit(&mut jj, "Test other commit", "file other");
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(change.clone(), None), (child_change.clone(), None)],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
+
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
             .expect("Expected to find branch on bare upstream");
@@ -620,21 +539,20 @@ mod tests {
             .refname_to_id("HEAD")
             .expect("Failed to revparse HEAD");
 
-        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let change = jj
-            .read_revision(&testing::config::basic(), rev)
-            .expect("Failed to read revision");
-        let _ = handle_revs(
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(change.clone(), None)],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -644,53 +562,20 @@ mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
 
-        jj.git_repo
-            .set_head_detached(trunk_oid)
-            .expect("Failed to checkout trunk");
-        let _ = create_jujutsu_commit(&mut jj, "New head", "file 3");
-        let updated_trunk_oid = jj
-            .git_repo
-            .refname_to_id("HEAD")
-            .expect("Failed to revparse HEAD");
-        jj.git_repo
-            .find_remote("origin")
-            .expect("Didn't find origin on repo")
-            .push(&["HEAD:refs/heads/main"], None)
-            .expect("Failed to push new main");
+        let updated_trunk_oid =
+            testing::git::add_commit_on_and_push_to_remote(&jj.git_repo, "main", [trunk_oid]);
 
-        let _ = handle_revs(
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(
-                change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from(""),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::new(),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "main", "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            )],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
+
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
             .expect("Expected to find branch on bare upstream");
@@ -723,20 +608,19 @@ mod tests {
             .expect("Failed to revparse HEAD");
 
         let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let change = jj
-            .read_revision(&testing::config::basic(), rev.clone())
-            .expect("Failed to read revision");
-        let _ = handle_revs(
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(change.clone(), None)],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -746,56 +630,32 @@ mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
 
-        jj.git_repo
-            .set_head_detached(trunk_oid)
-            .expect("Failed to checkout trunk");
-        let new_trunk = create_jujutsu_commit(&mut jj, "New head", "file 3");
-        let updated_trunk_oid = jj
-            .git_repo
-            .refname_to_id("HEAD")
-            .expect("Failed to revparse HEAD");
-        jj.git_repo
-            .find_remote("origin")
-            .expect("Didn't find origin on repo")
-            .push(&["HEAD:refs/heads/main"], None)
-            .expect("Failed to push new main");
+        let updated_trunk_oid =
+            testing::git::add_commit_on_and_push_to_remote(&jj.git_repo, "main", [trunk_oid]);
+        jj.update().expect("Update isn't supposed to fail");
+        let updated_trunk_change_id = {
+            let commit = jj
+                .git_repo
+                .find_commit(updated_trunk_oid)
+                .expect("Should be able to find newly created commit");
 
-        jj.rebase_branch(&RevSet::from(&rev), ChangeId::from(new_trunk.as_ref()))
+            jj.revset_to_change_id(&RevSet::from(&commit))
+                .expect("Should be able to find a jj id for the commit")
+        };
+
+        jj.rebase_branch(&RevSet::from(&rev), updated_trunk_change_id)
             .expect("Failed to rebase revision");
-
-        let _ = handle_revs(
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(
-                change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from(""),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::new(),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "main", "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            )],
-            updated_trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
+
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
             .expect("Expected to find branch on bare upstream");
@@ -824,25 +684,30 @@ mod tests {
             .expect("Failed to revparse HEAD");
 
         let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let change = jj
-            .read_revision(&testing::config::basic(), rev.clone())
-            .expect("Failed to read revision");
-
         let child_rev = create_jujutsu_commit(&mut jj, "Test other commit", "file other");
-        let child_change = jj
-            .read_revision(&testing::config::basic(), child_rev)
-            .expect("Failed to read child revision");
-        let _ = handle_revs(
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(change.clone(), None), (child_change.clone(), None)],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
+
+        let pr_branch = bare
+            .find_branch("spr/test/test-commit", git2::BranchType::Local)
+            .expect("Expected to find other branch on bare upstream");
+        let initial_pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get other oid from pr branch");
+
         let child_pr_branch = bare
             .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
             .expect("Expected to find other branch on bare upstream");
@@ -851,69 +716,21 @@ mod tests {
             .target()
             .expect("Failed to get other oid from pr branch");
 
-        jj.new_revision(Some(RevSet::from(&rev)), None as Option<&str>, true)
+        jj.new_revision(Some(RevSet::from(&rev)), None as Option<&str>, false)
             .expect("Failed to create new revision");
         amend_jujutsu_revision(&mut jj, "file 2");
-        let _ = handle_revs(
+        jj.new_revision(Some(RevSet::from(&child_rev)), None as Option<&str>, false)
+            .expect("Failed to create new revision");
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [
-                (
-                    change.clone(),
-                    Some(crate::github::PullRequest {
-                        number: 1,
-                        state: crate::github::PullRequestState::Open,
-                        title: String::from(""),
-                        body: None,
-                        base_oid: git2::Oid::zero(),
-                        sections: std::collections::BTreeMap::new(),
-                        base: crate::github::GitHubBranch::new_from_branch_name(
-                            "main", "origin", "main",
-                        ),
-                        head_oid: git2::Oid::zero(),
-                        head: crate::github::GitHubBranch::new_from_branch_name(
-                            "spr/test/test-commit",
-                            "origin",
-                            "main",
-                        ),
-                        merge_commit: None,
-                        reviewers: std::collections::HashMap::new(),
-                        review_status: None,
-                    }),
-                ),
-                (
-                    child_change.clone(),
-                    Some(crate::github::PullRequest {
-                        number: 1,
-                        state: crate::github::PullRequestState::Open,
-                        title: String::from(""),
-                        body: None,
-                        base_oid: git2::Oid::zero(),
-                        sections: std::collections::BTreeMap::new(),
-                        base: crate::github::GitHubBranch::new_from_branch_name(
-                            "spr/test/test-commit",
-                            "origin",
-                            "main",
-                        ),
-                        head_oid: git2::Oid::zero(),
-                        head: crate::github::GitHubBranch::new_from_branch_name(
-                            "spr/test/test-other-commit",
-                            "origin",
-                            "main",
-                        ),
-                        merge_commit: None,
-                        reviewers: std::collections::HashMap::new(),
-                        review_status: None,
-                    }),
-                ),
-            ],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -923,6 +740,7 @@ mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
         assert!(pr_oid != trunk_oid, "base PR was equal to trunk");
+        assert_ne!(initial_pr_oid, pr_oid, "Base PR wasn't amended");
 
         let child_pr_branch = bare
             .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
@@ -948,26 +766,20 @@ mod tests {
     #[tokio::test]
     async fn test_no_update_without_change() {
         let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
-        let trunk_oid = jj
-            .git_repo
-            .refname_to_id("HEAD")
-            .expect("Failed to revparse HEAD");
-
-        let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let change = jj
-            .read_revision(&testing::config::basic(), rev)
-            .expect("Failed to read revision");
-        let _ = handle_revs(
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(change.clone(), None)],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
 
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
@@ -976,39 +788,17 @@ mod tests {
             .get()
             .target()
             .expect("Failed to get oid from pr branch");
-        let _ = handle_revs(
+        super::stacked(
+            &mut jj,
+            &mut gh,
             &testing::config::basic(),
-            &jj,
-            &super::StackedOptions {
-                message: Some("".into()),
+            super::StackedOptions {
+                message: Some(String::from("")),
             },
-            [(
-                change.clone(),
-                Some(crate::github::PullRequest {
-                    number: 1,
-                    state: crate::github::PullRequestState::Open,
-                    title: String::from(""),
-                    body: None,
-                    base_oid: git2::Oid::zero(),
-                    sections: std::collections::BTreeMap::new(),
-                    base: crate::github::GitHubBranch::new_from_branch_name(
-                        "main", "origin", "main",
-                    ),
-                    head_oid: git2::Oid::zero(),
-                    head: crate::github::GitHubBranch::new_from_branch_name(
-                        "spr/test/test-commit",
-                        "origin",
-                        "main",
-                    ),
-                    merge_commit: None,
-                    reviewers: std::collections::HashMap::new(),
-                    review_status: None,
-                }),
-            )],
-            trunk_oid,
         )
         .await
-        .expect("Expected to get branch name");
+        .expect("stacked shouldn't fail");
+
         let pr_branch = bare
             .find_branch("spr/test/test-commit", git2::BranchType::Local)
             .expect("Expected to find branch on bare upstream");
