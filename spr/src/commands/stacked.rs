@@ -14,6 +14,9 @@ pub struct StackedOptions {
     /// 'rebase' or 'review comments')
     #[clap(long, short = 'm')]
     message: Option<String>,
+
+    #[clap(long, short = 'r')]
+    revision: Option<String>,
 }
 
 async fn do_stacked<H: AsRef<str>>(
@@ -211,6 +214,10 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
+    let heads = opts
+        .revision
+        .as_ref()
+        .map_or(RevSet::current(), |s| RevSet::from_arg(s));
     // Get revisions to process
     // The pattern builds:
     // * ::@: Every ancestor of the current revision (including the current reveision)
@@ -221,7 +228,7 @@ where
     // i.e. all revisions between the current and upstream that have descriptions.
     // This somewhat funky pattern allows us to work both in the `jj new` case where changes need to be squashed into the main revision
     // and in the `jj edit` (or `jj new` + `jj describe`) case where the current `@` is the intended PR commit.
-    let revset = RevSet::current()
+    let revset = heads
         .ancestors()
         .without(&RevSet::immutable().or(&RevSet::description("exact:\"\"")));
     let revisions = jj.read_revision_range(config, &revset)?;
@@ -357,6 +364,7 @@ mod tests {
             gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -393,6 +401,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -413,6 +422,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -446,6 +456,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -466,6 +477,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -514,6 +526,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -561,6 +574,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -583,6 +597,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -629,6 +644,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -643,8 +659,12 @@ mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
 
-        let updated_trunk_oid =
-            testing::git::add_commit_on_and_push_to_remote_file(&jj.git_repo, "main", [trunk_oid], "file.txt");
+        let updated_trunk_oid = testing::git::add_commit_on_and_push_to_remote_file(
+            &jj.git_repo,
+            "main",
+            [trunk_oid],
+            "file.txt",
+        );
         jj.update().expect("Update isn't supposed to fail");
         let updated_trunk_change_id = {
             let commit = jj
@@ -663,6 +683,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -697,7 +718,8 @@ mod tests {
             .expect("Failed to revparse HEAD");
 
         let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let child_rev = create_jujutsu_commit_in_file(&mut jj, "Test other commit", "file other", "other file");
+        let child_rev =
+            create_jujutsu_commit_in_file(&mut jj, "Test other commit", "file other", "other file");
 
         let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
@@ -707,6 +729,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -739,6 +762,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -788,6 +812,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -806,6 +831,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
+                revision: None,
                 message: Some(String::from("")),
             },
         )
@@ -820,6 +846,76 @@ mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
         assert!(pr_oid == initial_pr_oid, "PR was updated without changes");
+    }
+
+    #[tokio::test]
+    async fn independent_heads() {
+        let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+        let base_change = jj
+            .revset_to_change_id(&RevSet::current().parent())
+            .expect("Should be able to find the base commit");
+
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+        let left_id = create_jujutsu_commit(&mut jj, "Other commit", "file 2");
+        jj.new_revision(
+            Some(RevSet::from(&base_change)),
+            None as Option<&str>,
+            false,
+        )
+        .expect("Couldn't create new revision on base");
+        let right_id = create_jujutsu_commit(&mut jj, "More commit", "file 3");
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::stacked(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::StackedOptions {
+                revision: Some(
+                    RevSet::from(&left_id)
+                        .or(&RevSet::from(&right_id))
+                        .as_ref()
+                        .into(),
+                ),
+                message: Some(String::from("")),
+            },
+        )
+        .await
+        .expect("stacked shouldn't fail");
+
+        let left_revision = jj
+            .read_revision(&testing::config::basic(), left_id)
+            .expect("Couldn't read left revision");
+        let right_revision = jj
+            .read_revision(&testing::config::basic(), right_id)
+            .expect("Couldn't read right revision");
+
+        assert_eq!(
+            gh.pull_requests
+                .get(
+                    &right_revision
+                        .pull_request_number
+                        .expect("couldn't get PR# from right revision")
+                )
+                .expect("Couldn't get PR from right revision")
+                .base,
+            testing::config::basic().master_ref.branch_name(),
+            "Right revision PR was created to wrong branch"
+        );
+        assert_ne!(
+            gh.pull_requests
+                .get(
+                    &left_revision
+                        .pull_request_number
+                        .expect("couldn't get PR# from left revision")
+                )
+                .expect("Couldn't get PR from left revision")
+                .base,
+            testing::config::basic().master_ref.branch_name(),
+            "left revision PR was created to wrong branch"
+        );
     }
 
     mod intended_fails {
@@ -857,6 +953,7 @@ mod tests {
                 &testing::config::basic(),
                 super::super::StackedOptions {
                     message: Some(String::from("")),
+                    revision: None,
                 },
             )
             .await
@@ -888,6 +985,7 @@ mod tests {
                 &testing::config::basic(),
                 super::super::StackedOptions {
                     message: Some(String::from("")),
+                    revision: None,
                 },
             )
             .await
