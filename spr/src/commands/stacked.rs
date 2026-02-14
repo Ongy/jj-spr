@@ -221,18 +221,22 @@ where
     // i.e. all revisions between the current and upstream that have descriptions.
     // This somewhat funky pattern allows us to work both in the `jj new` case where changes need to be squashed into the main revision
     // and in the `jj edit` (or `jj new` + `jj describe`) case where the current `@` is the intended PR commit.
-    let revisions = jj.read_revision_range(
-        config,
-        &RevSet::current()
-            .ancestors()
-            .without(&RevSet::immutable().or(&RevSet::description("exact:\"\""))),
-    )?;
+    let revset = RevSet::current()
+        .ancestors()
+        .without(&RevSet::immutable().or(&RevSet::description("exact:\"\"")));
+    let revisions = jj.read_revision_range(config, &revset)?;
 
-    // At this point we cannot deal with revisions that have multiple parents :/
-    if let Some(r) = revisions.iter().find(|r| r.parent_ids.len() != 1) {
+    let blockers = jj.revset_to_change_ids(
+        &revset.and(
+            &RevSet::conflicts()
+                .or(&RevSet::divergent())
+                .or(&RevSet::merges()),
+        ),
+    )?;
+    if !blockers.is_empty() {
         return Err(Error::new(format!(
-            "Found commit with more than one parent {:?}",
-            r.id
+            "Found invalid commits: {:?}. (They can be divergent, conflicted or merge commits.)",
+            blockers
         )));
     }
 
@@ -306,17 +310,18 @@ mod tests {
         jj.squash().expect("Failed to squash revision");
     }
 
-    fn create_jujutsu_commit(
+    fn create_jujutsu_commit_in_file(
         jj: &mut crate::jj::Jujutsu,
         message: &str,
         file_content: &str,
+        path: &str,
     ) -> ChangeId {
         // Create a file
         let file_path = jj
             .git_repo
             .workdir()
             .expect("Failed to extract workdir from JJ handle")
-            .join("test.txt");
+            .join(path);
         fs::write(&file_path, file_content).expect("Failed to write test file");
 
         jj.commit(message).expect("Failed to commit revision");
@@ -324,6 +329,14 @@ mod tests {
             jj.revset_to_change_id(&RevSet::current().parent())
                 .expect("Failed to get changeid of '@-'"),
         )
+    }
+
+    fn create_jujutsu_commit(
+        jj: &mut crate::jj::Jujutsu,
+        message: &str,
+        file_content: &str,
+    ) -> ChangeId {
+        create_jujutsu_commit_in_file(jj, message, file_content, "test.txt")
     }
 
     #[tokio::test]
@@ -631,7 +644,7 @@ mod tests {
             .expect("Failed to get oid from pr branch");
 
         let updated_trunk_oid =
-            testing::git::add_commit_on_and_push_to_remote(&jj.git_repo, "main", [trunk_oid]);
+            testing::git::add_commit_on_and_push_to_remote_file(&jj.git_repo, "main", [trunk_oid], "file.txt");
         jj.update().expect("Update isn't supposed to fail");
         let updated_trunk_change_id = {
             let commit = jj
@@ -684,7 +697,7 @@ mod tests {
             .expect("Failed to revparse HEAD");
 
         let rev = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let child_rev = create_jujutsu_commit(&mut jj, "Test other commit", "file other");
+        let child_rev = create_jujutsu_commit_in_file(&mut jj, "Test other commit", "file other", "other file");
 
         let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
@@ -807,5 +820,78 @@ mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
         assert!(pr_oid == initial_pr_oid, "PR was updated without changes");
+    }
+
+    mod intended_fails {
+        use crate::{jj::RevSet, testing};
+
+        #[tokio::test]
+        async fn multi_parent() {
+            let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.new_revision(Some(RevSet::root()), Some("Left"), false)
+                .expect("Failed to create left revision");
+            let left = jj
+                .revset_to_change_id(&RevSet::current())
+                .expect("Failed to resolve left change id");
+            jj.new_revision(Some(RevSet::root()), Some("Right"), false)
+                .expect("Failed to create left revision");
+            let right = jj
+                .revset_to_change_id(&RevSet::current())
+                .expect("Failed to resolve left change id");
+
+            let _ = jj
+                .new_revision(
+                    Some(RevSet::from(&left).or(&RevSet::from(&right))),
+                    Some("Parent"),
+                    false,
+                )
+                .expect("Failed to create left revision");
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::stacked(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::StackedOptions {
+                    message: Some(String::from("")),
+                },
+            )
+            .await
+            .expect_err("Stacked should refuse to handle multi-parent change");
+        }
+
+        #[tokio::test]
+        async fn conflicted() {
+            let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.new_revision(Some(RevSet::root()), None as Option<&'static str>, false)
+                .expect("Failed to create left revision");
+            let main = super::create_jujutsu_commit(&mut jj, "Message", "content 1");
+            jj.new_revision(Some(RevSet::root()), None as Option<&str>, false)
+                .expect("Failed to create left revision");
+            let second = super::create_jujutsu_commit(&mut jj, "Other", "content 2");
+
+            jj.squash_from_into(&RevSet::from(&second), &RevSet::from(&main))
+                .expect("Didn't expect squash to fail");
+            jj.new_revision(Some(RevSet::from(&main)), None as Option<&str>, false)
+                .expect("Failed to create new change on conflicted change :o");
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::stacked(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::StackedOptions {
+                    message: Some(String::from("")),
+                },
+            )
+            .await
+            .expect_err("Stacked should refuse to handle change with conflicts");
+        }
     }
 }

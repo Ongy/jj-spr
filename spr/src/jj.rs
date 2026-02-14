@@ -74,6 +74,22 @@ impl RevSet {
         RevSet("@".into())
     }
 
+    pub fn root() -> Self {
+        RevSet("root()".into())
+    }
+
+    pub fn conflicts() -> Self {
+        RevSet("conflicts()".into())
+    }
+
+    pub fn divergent() -> Self {
+        RevSet("none()".into())
+    }
+
+    pub fn merges() -> Self {
+        RevSet("merges()".into())
+    }
+
     // From known
     /// This is only intended to be used for user input
     pub fn from_arg<S: Into<String>>(s: S) -> Self {
@@ -476,6 +492,19 @@ impl Jujutsu {
 
     pub fn squash(&mut self) -> Result<()> {
         let _ = self.run_captured_with_args(["squash", "--use-destination-message"])?;
+
+        Ok(())
+    }
+
+    pub fn squash_from_into(&mut self, from: &RevSet, to: &RevSet) -> Result<()> {
+        let _ = self.run_captured_with_args([
+            "squash",
+            "--use-destination-message",
+            "--from",
+            from.as_ref(),
+            "--to",
+            to.as_ref(),
+        ])?;
 
         Ok(())
     }
