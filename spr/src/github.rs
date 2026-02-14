@@ -570,9 +570,6 @@ pub trait GHPullRequest {
 }
 
 pub trait GitHubAdapter {
-    //    fn get_user(
-    //        &mut self,
-    //    ) -> impl std::future::Future<Output = crate::error::Result<String>> + Send;
     type PRAdapter: Send;
 
     fn pull_request(
