@@ -567,6 +567,7 @@ pub trait GHPullRequest {
     fn base_branch_name(&self) -> &str;
     fn pr_number(&self) -> u64;
     fn sections(&self) -> &MessageSectionsMap;
+    fn closed(&self) -> bool;
 }
 
 pub trait GitHubAdapter {
@@ -624,6 +625,10 @@ impl GHPullRequest for PullRequest {
 
     fn sections(&self) -> &MessageSectionsMap {
         &self.sections
+    }
+
+    fn closed(&self) -> bool {
+        self.state == PullRequestState::Closed
     }
 }
 
@@ -706,6 +711,10 @@ pub mod fakes {
 
         fn sections(&self) -> &MessageSectionsMap {
             &self.sections
+        }
+
+        fn closed(&self) -> bool {
+            false
         }
     }
 

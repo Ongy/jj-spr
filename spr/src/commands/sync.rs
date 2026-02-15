@@ -2,7 +2,6 @@ use std::iter::zip;
 
 use crate::{
     error::Result,
-    github::PullRequestState,
     jj::{ChangeId, RevSet},
     output::output,
 };
@@ -13,23 +12,16 @@ pub struct SyncOpts {
     revset: Option<String>,
 }
 
-async fn collect_futures<J, I: IntoIterator<Item = tokio::task::JoinHandle<J>>>(
-    it: I,
-) -> Result<Vec<J>> {
-    let iterator = it.into_iter();
-    let mut results = Vec::with_capacity(iterator.size_hint().0);
-    for handle in iterator {
-        results.push(handle.await?);
-    }
-    Ok(results)
-}
-
-pub async fn sync(
+pub async fn sync<GH, PR>(
     jj: &mut crate::jj::Jujutsu,
-    gh: &mut crate::github::GitHub,
+    mut gh: GH,
     config: &crate::config::Config,
     opts: SyncOpts,
-) -> Result<()> {
+) -> Result<()>
+where
+    PR: crate::github::GHPullRequest,
+    GH: crate::github::GitHubAdapter<PRAdapter = PR>,
+{
     jj.run_git_fetch()?;
     let revset = opts
         .revset
@@ -45,22 +37,11 @@ pub async fn sync(
             .and(&RevSet::description("glob:\"*Pull Request:*\"").without(&RevSet::immutable())),
     )?;
 
-    let pull_requests: Result<Vec<_>> =
-        collect_futures(revisions.iter().map(|r: &crate::jj::Revision| {
-            let gh = gh.clone();
-            let pr_num = r.pull_request_number;
-            tokio::spawn(async move {
-                match pr_num {
-                    Some(number) => gh.get_pull_request(number).await.map(|v| Some(v)),
-                    None => Ok(None),
-                }
-            })
-        }))
-        .await?
-        .into_iter()
-        .collect();
+    let pull_requests = gh
+        .pull_requests(revisions.iter().map(|n| n.pull_request_number))
+        .await?;
 
-    for (rev, pr) in zip(revisions, pull_requests?).into_iter() {
+    for (rev, pr) in zip(revisions, pull_requests).into_iter() {
         let pr = if let Some(pr) = pr {
             pr
         } else {
@@ -68,12 +49,12 @@ pub async fn sync(
         };
 
         // TODO: Should this only abandon changes of PRs that have been merged?
-        if pr.state == PullRequestState::Closed {
+        if pr.closed() {
             output(
                 "🛬",
                 format!(
                     "{} landed. Abandoning {:?}",
-                    config.pull_request_url(pr.number),
+                    config.pull_request_url(pr.pr_number()),
                     rev.id,
                 ),
             )?;
