@@ -90,6 +90,10 @@ impl RevSet {
         RevSet("merges()".into())
     }
 
+    pub fn mutable() -> Self {
+        RevSet("mutable()".into())
+    }
+
     // From known
     /// This is only intended to be used for user input
     pub fn from_arg<S: Into<String>>(s: S) -> Self {
@@ -153,6 +157,10 @@ impl RevSet {
 
     pub fn parent(&self) -> Self {
         RevSet(format!("({})-", self.0))
+    }
+
+    pub fn heads(&self) -> Self {
+        RevSet(format!("heads({})", self.0))
     }
 
     // Restrictions

@@ -15,8 +15,11 @@ pub struct StackedOptions {
     #[clap(long, short = 'm')]
     message: Option<String>,
 
-    #[clap(long, short = 'r')]
-    revision: Option<String>,
+    #[clap(long, short = 'r', group = "revs")]
+    revset: Option<String>,
+
+    #[clap(long, short = 'a', group = "revs")]
+    all: bool,
 }
 
 async fn do_stacked<H: AsRef<str>>(
@@ -215,9 +218,14 @@ where
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
     let heads = opts
-        .revision
+        .revset
         .as_ref()
-        .map_or(RevSet::current(), |s| RevSet::from_arg(s));
+        .map(|s| RevSet::from_arg(s))
+        .unwrap_or(if opts.all {
+            RevSet::mutable().heads()
+        } else {
+            RevSet::current()
+        });
     // Get revisions to process
     // The pattern builds:
     // * ::@: Every ancestor of the current revision (including the current reveision)
@@ -364,7 +372,7 @@ mod tests {
             gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -401,7 +409,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -422,7 +430,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -456,7 +464,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -477,7 +485,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -526,7 +534,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -574,7 +582,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -597,7 +605,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -644,7 +652,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -683,7 +691,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -729,7 +737,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -762,7 +770,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -812,7 +820,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -831,7 +839,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: None,
+                revset: None,
                 message: Some(String::from("")),
             },
         )
@@ -873,7 +881,7 @@ mod tests {
             &mut gh,
             &testing::config::basic(),
             super::StackedOptions {
-                revision: Some(
+                revset: Some(
                     RevSet::from(&left_id)
                         .or(&RevSet::from(&right_id))
                         .as_ref()
@@ -953,7 +961,7 @@ mod tests {
                 &testing::config::basic(),
                 super::super::StackedOptions {
                     message: Some(String::from("")),
-                    revision: None,
+                    revset: None,
                 },
             )
             .await
@@ -985,7 +993,7 @@ mod tests {
                 &testing::config::basic(),
                 super::super::StackedOptions {
                     message: Some(String::from("")),
-                    revision: None,
+                    revset: None,
                 },
             )
             .await

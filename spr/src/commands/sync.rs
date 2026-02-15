@@ -8,8 +8,11 @@ use crate::{
 
 #[derive(Debug, clap::Parser)]
 pub struct SyncOpts {
-    #[clap(long, short = 'r')]
+    #[clap(long, short = 'r', group = "revs")]
     revset: Option<String>,
+
+    #[clap(long, short = 'a', group = "revs")]
+    all: bool,
 }
 
 pub async fn sync<GH, PR>(
@@ -27,7 +30,11 @@ where
         .revset
         .as_ref()
         .map(|s| RevSet::from_arg(s))
-        .unwrap_or(RevSet::current());
+        .unwrap_or(if opts.all {
+            RevSet::mutable().heads()
+        } else {
+            RevSet::current()
+        });
 
     // We are interested in all revisions that have PRs
     let revisions = jj.read_revision_range(

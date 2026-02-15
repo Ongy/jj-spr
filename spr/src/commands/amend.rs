@@ -14,18 +14,13 @@ use crate::{
 
 #[derive(Debug, clap::Parser)]
 pub struct AmendOptions {
-    /// Amend commits in range from base to revision
-    #[clap(long, short = 'a')]
-    all: bool,
-
-    /// Base revision for --all mode (if not specified, uses trunk)
-    #[clap(long)]
-    base: Option<String>,
-
     /// Jujutsu revision(s) to operate on. Can be a single revision like '@' or a range like 'main..@' or 'a::c'.
     /// If a range is provided, behaves like --all mode. If not specified, uses '@-'.
-    #[clap(short = 'r', long)]
-    revision: Option<String>,
+    #[clap(short = 'r', long, group = "revs")]
+    revset: Option<String>,
+
+    #[clap(long, short = 'a', group = "revs")]
+    all: bool,
 
     /// Whether to also merge in any code changes
     #[clap(long)]
@@ -123,9 +118,18 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
+    let revset = opts
+        .revset
+        .as_ref()
+        .map(|s| RevSet::from_arg(s))
+        .unwrap_or(if opts.all {
+            RevSet::mutable().heads()
+        } else {
+            RevSet::current()
+        });
     let revisions = jj.read_revision_range(
         config,
-        &RevSet::current()
+        &&revset
             .ancestors()
             .without(&RevSet::immutable().or(&RevSet::description("exact:\"\""))),
     )?;
@@ -195,7 +199,7 @@ mod tests {
             AmendOptions {
                 all: false,
                 base: None,
-                revision: None,
+                revset: None,
                 pull_code_changes: false,
             },
             &mut jj,
@@ -271,7 +275,7 @@ mod tests {
             AmendOptions {
                 all: false,
                 base: None,
-                revision: Some(rev.as_ref().into()),
+                revset: Some(rev.as_ref().into()),
                 pull_code_changes: true,
             },
             &mut jj,
@@ -361,7 +365,7 @@ mod tests {
             AmendOptions {
                 all: false,
                 base: None,
-                revision: Some(rev.as_ref().into()),
+                revset: Some(rev.as_ref().into()),
                 pull_code_changes: true,
             },
             &mut jj,
@@ -437,7 +441,7 @@ mod tests {
             AmendOptions {
                 all: false,
                 base: None,
-                revision: Some(rev.as_ref().into()),
+                revset: Some(rev.as_ref().into()),
                 pull_code_changes: true,
             },
             &mut jj,
