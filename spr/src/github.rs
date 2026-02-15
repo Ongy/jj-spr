@@ -200,6 +200,7 @@ impl GitHub {
             .json(&request_body)
             .send()
             .await?;
+
         let response_body: Response<pull_request_by_head_query::ResponseData> = res.json().await?;
         let pr_iter: Vec<_> = response_body
             .data

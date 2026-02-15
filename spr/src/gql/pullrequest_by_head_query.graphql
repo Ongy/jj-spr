@@ -1,11 +1,8 @@
 query PullRequestByHeadQuery($name: String!, $owner: String!, $head: String!) {
   repository(owner: $owner, name: $name) {
-    pullRequests(headRefName: $head) {
+    pullRequests(headRefName: $head, first: 1) {
       nodes {
-        __typename
-        ... on PullRequest {
           number
-        }
       }
     }
   }
