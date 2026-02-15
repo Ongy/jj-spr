@@ -12,8 +12,8 @@ use crate::{
     output::output,
 };
 
-#[derive(Debug, clap::Parser)]
-pub struct AmendOptions {
+#[derive(Debug, clap::Parser, Default)]
+pub struct FetchOptions {
     /// Jujutsu revision(s) to operate on. Can be a single revision like '@' or a range like 'main..@' or 'a::c'.
     /// If a range is provided, behaves like --all mode. If not specified, uses '@-'.
     #[clap(short = 'r', long, group = "revs")]
@@ -27,7 +27,23 @@ pub struct AmendOptions {
     pull_code_changes: bool,
 }
 
-fn do_amend<
+#[cfg(test)]
+impl FetchOptions {
+    fn with_revset<S>(mut self, revset: Option<S>) -> Self
+    where
+        S: Into<String>,
+    {
+        self.revset = revset.map(|s| s.into());
+        self
+    }
+
+    fn with_pull_code(mut self) -> Self {
+        self.pull_code_changes = true;
+        self
+    }
+}
+
+fn do_fetch<
     I: IntoIterator<
         Item = (
             crate::jj::Revision,
@@ -35,7 +51,7 @@ fn do_amend<
         ),
     >,
 >(
-    opts: AmendOptions,
+    opts: FetchOptions,
     jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
     commits: I,
@@ -108,8 +124,8 @@ fn do_amend<
     if failure { Err(Error::empty()) } else { Ok(()) }
 }
 
-pub async fn amend<GH, PR>(
-    opts: AmendOptions,
+pub async fn fetch<GH, PR>(
+    opts: FetchOptions,
     jj: &mut crate::jj::Jujutsu,
     mut gh: GH,
     config: &crate::config::Config,
@@ -143,7 +159,7 @@ where
         .pull_requests(revisions.iter().map(|r| r.pull_request_number))
         .await?;
 
-    do_amend(
+    do_fetch(
         opts,
         jj,
         config,
@@ -153,8 +169,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::FetchOptions;
     use crate::{
-        commands::amend::AmendOptions,
         jj::{ChangeId, RevSet},
         message::MessageSection,
         testing,
@@ -195,13 +211,8 @@ mod tests {
             "file 1",
         );
 
-        super::amend(
-            AmendOptions {
-                all: false,
-                base: None,
-                revset: None,
-                pull_code_changes: false,
-            },
+        super::fetch(
+            FetchOptions::default(),
             &mut jj,
             crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
@@ -271,13 +282,10 @@ mod tests {
             .expect("Expected to be able to checkout trunk");
         testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-commit");
 
-        super::amend(
-            AmendOptions {
-                all: false,
-                base: None,
-                revset: Some(rev.as_ref().into()),
-                pull_code_changes: true,
-            },
+        super::fetch(
+            FetchOptions::default()
+                .with_revset(Some(rev.as_ref()))
+                .with_pull_code(),
             &mut jj,
             crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
@@ -361,13 +369,10 @@ mod tests {
         );
 
         jj.update().expect("Expected to be able to update JJ state");
-        super::amend(
-            AmendOptions {
-                all: false,
-                base: None,
-                revset: Some(rev.as_ref().into()),
-                pull_code_changes: true,
-            },
+        super::fetch(
+            FetchOptions::default()
+                .with_revset(Some(rev.as_ref()))
+                .with_pull_code(),
             &mut jj,
             crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
@@ -437,13 +442,10 @@ mod tests {
         jj.rebase_branch(&RevSet::from(&rev), head_change)
             .expect("Should be able to rebase rev");
 
-        super::amend(
-            AmendOptions {
-                all: false,
-                base: None,
-                revset: Some(rev.as_ref().into()),
-                pull_code_changes: true,
-            },
+        super::fetch(
+            FetchOptions::default()
+                .with_revset(Some(rev.as_ref()))
+                .with_pull_code(),
             &mut jj,
             crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(

@@ -52,19 +52,19 @@ enum Commands {
     Init,
 
     /// Create a new or update an existing Pull Request on GitHub
-    Stacked(commands::stacked::StackedOptions),
+    Push(commands::push::PushOptions),
 
     /// Pull state from github and merge into local pull requests
     Sync(commands::sync::SyncOpts),
 
     /// Update local commit message with content on GitHub
-    Amend(commands::amend::AmendOptions),
+    Amend(commands::fetch::FetchOptions),
 
     /// List open Pull Requests on GitHub and their review decision
     List,
 
     /// Create a new branch with the contents of an existing Pull Request
-    Patch(commands::patch::PatchOptions),
+    Patch(commands::adopt::AdoptOptions),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -139,11 +139,11 @@ pub async fn spr() -> Result<()> {
     let mut gh = jj_spr::github::GitHub::new(config.clone(), graphql_client.clone());
 
     match cli.command {
-        Commands::Amend(opts) => commands::amend::amend(opts, &mut jj, &mut gh, &config).await?,
+        Commands::Amend(opts) => commands::fetch::fetch(opts, &mut jj, &mut gh, &config).await?,
         Commands::List => commands::list::list(graphql_client, &config).await?,
-        Commands::Patch(opts) => commands::patch::patch(opts, &mut jj, &mut gh, &config).await?,
-        Commands::Stacked(opts) => {
-            commands::stacked::stacked(&mut jj, &mut gh, &config, opts).await?
+        Commands::Patch(opts) => commands::adopt::adopt(opts, &mut jj, &mut gh, &config).await?,
+        Commands::Push(opts) => {
+            commands::push::push(&mut jj, &mut gh, &config, opts).await?
         }
         Commands::Sync(opts) => commands::sync::sync(&mut jj, &mut gh, &config, opts).await?,
         // The following commands are executed above and return from this
