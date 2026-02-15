@@ -720,6 +720,7 @@ pub mod fakes {
         }
     }
 
+    #[derive(Debug, Clone)]
     pub struct GitHub {
         pub pull_requests: std::collections::BTreeMap<u64, PullRequest>,
     }
