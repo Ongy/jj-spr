@@ -217,8 +217,7 @@ impl GitHub {
         if pr_iter.len() == 1
             && let Some(pr) = pr_iter.first()
         {
-            println!("{pr:?}");
-            self.get_pull_request(0).await
+            self.get_pull_request(pr.number as u64).await
         } else {
             Err(Error::new("Didn't find exactly one PR with that head"))
         }
