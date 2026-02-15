@@ -184,36 +184,43 @@ impl GitHub {
     where
         S: Into<String>,
     {
-        let nr = {
-            let GitHub {
-                ref config,
-                ref graphql_client,
-            } = self;
+        let GitHub {
+            ref config,
+            ref graphql_client,
+        } = self;
 
-            let variables = pull_request_by_head_query::Variables {
-                name: config.repo.clone(),
-                owner: config.owner.clone(),
-                head: head.into(),
-            };
-            let request_body = PullRequestByHeadQuery::build_query(variables);
-            let res = graphql_client
-                .post("https://api.github.com/graphql")
-                .json(&request_body)
-                .send()
-                .await?;
-            let response_body: Response<pull_request_query::ResponseData> = res.json().await?;
+        let variables = pull_request_by_head_query::Variables {
+            name: config.repo.clone(),
+            owner: config.owner.clone(),
+            head: head.into(),
+        };
+        let request_body = PullRequestByHeadQuery::build_query(variables);
+        let res = graphql_client
+            .post("https://api.github.com/graphql")
+            .json(&request_body)
+            .send()
+            .await?;
+        let response_body: Response<pull_request_by_head_query::ResponseData> = res.json().await?;
+        let pr_iter: Vec<_> = response_body
+            .data
+            .ok_or_else(|| Error::new("failed to fetch pr"))?
+            .repository
+            .ok_or_else(|| Error::new("failed to find repository"))?
+            .pull_requests
+            .nodes
+            .into_iter()
+            .flatten()
+            .filter_map(|prs| prs)
+            .collect();
 
-            Ok(response_body
-                .data
-                .ok_or_else(|| Error::new("failed to fetch pr"))?
-                .repository
-                .ok_or_else(|| Error::new("failed to find repository"))?
-                .pull_request
-                .ok_or_else(|| Error::new("failed to find PR"))?
-                .number as u64) as Result<u64>
-        }?;
-
-        self.get_pull_request(nr).await
+        if pr_iter.len() == 1
+            && let Some(pr) = pr_iter.first()
+        {
+            println!("{pr:?}");
+            self.get_pull_request(0).await
+        } else {
+            Err(Error::new("Didn't find exactly one PR with that head"))
+        }
     }
 
     pub async fn get_pull_request(self, number: u64) -> Result<PullRequest> {
