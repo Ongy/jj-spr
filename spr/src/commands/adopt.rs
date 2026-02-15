@@ -12,7 +12,7 @@ use crate::{
 };
 
 #[derive(Debug, clap::Parser)]
-pub struct PatchOptions {
+pub struct AdoptOptions {
     /// Pull Request number
     pull_request: u64,
 
@@ -25,7 +25,7 @@ pub struct PatchOptions {
     no_checkout: bool,
 }
 
-fn do_patch(
+fn do_adopt(
     jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
     message: &MessageSectionsMap,
@@ -74,8 +74,8 @@ fn do_patch(
     Ok(())
 }
 
-pub async fn patch<GH, PR>(
-    opts: PatchOptions,
+pub async fn adopt<GH, PR>(
+    opts: AdoptOptions,
     jj: &mut crate::jj::Jujutsu,
     mut gh: GH,
     config: &crate::config::Config,
@@ -93,12 +93,13 @@ where
         )));
     }
 
-    do_patch(jj, config, pr.sections(), pr.head_branch_name())
+    do_adopt(jj, config, pr.sections(), pr.head_branch_name())
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{commands::patch::PatchOptions, jj::RevSet, message::MessageSection, testing};
+    use super::AdoptOptions;
+    use crate::{jj::RevSet, message::MessageSection, testing};
 
     #[tokio::test]
     async fn test_single_on_head() {
@@ -111,8 +112,8 @@ mod tests {
             .expect("Expected to get tree for commit");
         let new_main = testing::git::add_commit_and_push_to_remote(&jj.git_repo, "main");
 
-        super::patch(
-            PatchOptions {
+        super::adopt(
+            AdoptOptions {
                 pull_request: 1,
                 branch_name: None,
                 no_checkout: true,

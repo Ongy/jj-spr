@@ -8,10 +8,8 @@ use crate::{
 use git2::Oid;
 use std::{io::ErrorKind, iter::zip};
 
-#[derive(Debug, clap::Parser)]
-pub struct StackedOptions {
-    /// Message to be used for commits updating existing pull requests (e.g.
-    /// 'rebase' or 'review comments')
+#[derive(Debug, clap::Parser, Default)]
+pub struct PushOptions {
     #[clap(long, short = 'm')]
     message: Option<String>,
 
@@ -22,10 +20,29 @@ pub struct StackedOptions {
     all: bool,
 }
 
-async fn do_stacked<H: AsRef<str>>(
+#[cfg(test)]
+impl PushOptions {
+    fn with_message<S>(mut self, message: Option<S>) -> Self
+    where
+        S: Into<String>,
+    {
+        self.message = message.map(|s| s.into());
+        self
+    }
+
+    fn with_revset<S>(mut self, revset: Option<S>) -> Self
+    where
+        S: Into<String>,
+    {
+        self.revset = revset.map(|s| s.into());
+        self
+    }
+}
+
+async fn do_push_single<H: AsRef<str>>(
     jj: &crate::jj::Jujutsu,
     config: &crate::config::Config,
-    opts: &StackedOptions,
+    opts: &PushOptions,
     revision: &mut crate::jj::Revision,
     base_ref: String,
     head_branch: H,
@@ -137,10 +154,10 @@ struct BranchAction {
     existing_nr: Option<u64>,
 }
 
-async fn handle_revs<I, PR>(
+async fn do_push<I, PR>(
     config: &crate::config::Config,
     jj: &crate::jj::Jujutsu,
-    opts: &StackedOptions,
+    opts: &PushOptions,
     revisions: I,
     trunk_oid: Oid,
 ) -> Result<Vec<BranchAction>>
@@ -178,7 +195,7 @@ where
             None
         };
 
-        do_stacked(
+        do_push_single(
             jj,
             config,
             opts,
@@ -207,11 +224,11 @@ where
     Ok(seen)
 }
 
-pub async fn stacked<GH, PR>(
+pub async fn push<GH, PR>(
     jj: &mut crate::jj::Jujutsu,
     mut gh: GH,
     config: &crate::config::Config,
-    opts: StackedOptions,
+    opts: PushOptions,
 ) -> Result<()>
 where
     PR: crate::github::GHPullRequest,
@@ -268,7 +285,7 @@ where
         .pull_requests(revisions.iter().map(|r| r.pull_request_number))
         .await?;
 
-    let actions = handle_revs(config, jj, &opts, zip(revisions, pull_requests), trunk_oid).await?;
+    let actions = do_push(config, jj, &opts, zip(revisions, pull_requests), trunk_oid).await?;
     for mut action in actions.into_iter() {
         // We don't know what to do with these yet...
         if let Some(_) = action.existing_nr {
@@ -367,14 +384,11 @@ mod tests {
         let gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
-        super::stacked(
+        super::push(
             &mut jj,
             gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -404,14 +418,11 @@ mod tests {
         let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -425,14 +436,11 @@ mod tests {
             .expect("Failed to get oid from pr branch");
 
         amend_jujutsu_revision(&mut jj, "file 2");
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -459,14 +467,11 @@ mod tests {
         let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -480,14 +485,11 @@ mod tests {
             .expect("Failed to get oid from pr branch");
 
         let _ = create_jujutsu_commit(&mut jj, "Test other commit", "file other");
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -529,14 +531,11 @@ mod tests {
         let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -577,14 +576,11 @@ mod tests {
         let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -600,14 +596,11 @@ mod tests {
         let updated_trunk_oid =
             testing::git::add_commit_on_and_push_to_remote(&jj.git_repo, "main", [trunk_oid]);
 
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -647,14 +640,11 @@ mod tests {
         let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -686,14 +676,11 @@ mod tests {
 
         jj.rebase_branch(&RevSet::from(&rev), updated_trunk_change_id)
             .expect("Failed to rebase revision");
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -732,14 +719,11 @@ mod tests {
         let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -765,14 +749,11 @@ mod tests {
         amend_jujutsu_revision(&mut jj, "file 2");
         jj.new_revision(Some(RevSet::from(&child_rev)), None as Option<&str>, false)
             .expect("Failed to create new revision");
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -815,14 +796,11 @@ mod tests {
         let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -834,14 +812,11 @@ mod tests {
             .get()
             .target()
             .expect("Failed to get oid from pr branch");
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: None,
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default().with_message(Some("message")),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -876,19 +851,15 @@ mod tests {
         let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
-        super::stacked(
+        super::push(
             &mut jj,
             &mut gh,
             &testing::config::basic(),
-            super::StackedOptions {
-                revset: Some(
-                    RevSet::from(&left_id)
-                        .or(&RevSet::from(&right_id))
-                        .as_ref()
-                        .into(),
-                ),
-                message: Some(String::from("")),
-            },
+            super::PushOptions::default()
+                .with_message(Some("message"))
+                .with_revset(Some(
+                    RevSet::from(&left_id).or(&RevSet::from(&right_id)).as_ref(),
+                )),
         )
         .await
         .expect("stacked shouldn't fail");
@@ -955,14 +926,11 @@ mod tests {
             let mut gh = crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::new(),
             };
-            super::super::stacked(
+            super::super::push(
                 &mut jj,
                 &mut gh,
                 &testing::config::basic(),
-                super::super::StackedOptions {
-                    message: Some(String::from("")),
-                    revset: None,
-                },
+                super::super::PushOptions::default().with_message(Some("message")),
             )
             .await
             .expect_err("Stacked should refuse to handle multi-parent change");
@@ -987,14 +955,11 @@ mod tests {
             let mut gh = crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::new(),
             };
-            super::super::stacked(
+            super::super::push(
                 &mut jj,
                 &mut gh,
                 &testing::config::basic(),
-                super::super::StackedOptions {
-                    message: Some(String::from("")),
-                    revset: None,
-                },
+                super::super::PushOptions::default().with_message(Some("message")),
             )
             .await
             .expect_err("Stacked should refuse to handle change with conflicts");
