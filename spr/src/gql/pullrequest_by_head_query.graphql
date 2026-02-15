@@ -1,0 +1,8 @@
+query PullRequestByHeadQuery($name: String!, $owner: String!, $head: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(headRefName: $head) {
+      number
+      headRefName
+    }
+  }
+}

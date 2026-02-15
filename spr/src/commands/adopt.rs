@@ -6,7 +6,7 @@
  */
 
 use crate::{
-    error::{Error, Result},
+    error::Result,
     jj::RevSet,
     message::{MessageSection, MessageSectionsMap, build_commit_message},
 };
@@ -25,11 +25,24 @@ pub struct AdoptOptions {
     no_checkout: bool,
 }
 
+fn find_commit_for_pr(
+    jj: &crate::jj::Jujutsu,
+    config: &crate::config::Config,
+    nr: u64,
+) -> Result<crate::jj::Revision> {
+    let url = config.pull_request_url(nr);
+
+    let id =
+        jj.revset_to_change_id(&RevSet::description(format!("substring:\"{}\"", url)).unique())?;
+    jj.read_revision(config, id)
+}
+
 fn do_adopt(
     jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
     message: &MessageSectionsMap,
     branch_name: &str,
+    parent: Option<u64>,
 ) -> Result<()> {
     jj.run_git_fetch()?;
 
@@ -40,13 +53,6 @@ fn do_adopt(
     let mut message = message.clone();
     message.insert(MessageSection::LastCommit, resolved.to_string());
     let message = build_commit_message(&message);
-    let base_revset = {
-        let base_branch = jj.git_repo.find_branch(
-            format!("{}/{}", config.remote_name, config.master_ref.branch_name()).as_str(),
-            git2::BranchType::Remote,
-        )?;
-        RevSet::from_remote_branch(&base_branch, config.remote_name.clone())?.unique()
-    };
 
     let head_revset = {
         let head_branch = jj.git_repo.find_branch(
@@ -56,11 +62,21 @@ fn do_adopt(
         RevSet::from_remote_branch(&head_branch, config.remote_name.clone())?.unique()
     };
 
-    jj.new_revision(
-        Some(base_revset.fork_point(&head_revset).unique()),
-        Some(message),
-        false,
-    )?;
+    let base_revset = if let Some(parent) = parent {
+        let url = config.pull_request_url(parent);
+        RevSet::description(format!("substring:\"{}\"", url)).unique()
+    } else {
+        let base_branch = jj.git_repo.find_branch(
+            format!("{}/{}", config.remote_name, config.master_ref.branch_name()).as_str(),
+            git2::BranchType::Remote,
+        )?;
+        RevSet::from_remote_branch(&base_branch, config.remote_name.clone())?
+            .unique()
+            .fork_point(&head_revset)
+            .unique()
+    };
+
+    jj.new_revision(Some(base_revset), Some(message), false)?;
 
     jj.restore(
         None as Option<&str>,
@@ -84,16 +100,32 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
+    let mut pr_chain = Vec::new();
     let pr = gh.pull_request(opts.pull_request).await?;
 
-    if pr.base_branch_name() != config.master_ref.branch_name() {
-        return Err(Error::new(format!(
-            "Specified PR {} is not based on the target branch. Adopting stacked PRs is not yet supported",
-            pr.pr_number()
-        )));
+    pr_chain.push((pr, None));
+    while let Some(last) = pr_chain.last_mut()
+        && last.0.base_branch_name() != config.master_ref.branch_name()
+    {
+        let next = gh.pull_request_by_head(last.0.base_branch_name()).await?;
+        last.1 = Some(next.pr_number());
+
+        // Early exit when we already have a change for the parent PR
+        if find_commit_for_pr(jj, config, next.pr_number()).is_ok() {
+            break;
+        }
+
+        // Otherwise, put it onto the chain to be pulled.
+        // The loop will continue to make sure we pull everything we need.
+        pr_chain.push((next, None));
+    }
+    pr_chain.reverse();
+
+    for (pr, parent) in pr_chain {
+        do_adopt(jj, config, pr.sections(), pr.head_branch_name(), parent)?;
     }
 
-    do_adopt(jj, config, pr.sections(), pr.head_branch_name())
+    Ok(())
 }
 
 #[cfg(test)]
@@ -114,16 +146,16 @@ mod tests {
 
         super::adopt(
             AdoptOptions {
-                pull_request: 1,
+                pull_request: pr_nr,
                 branch_name: None,
                 no_checkout: true,
             },
             &mut jj,
             crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
-                    1,
+                    pr_nr,
                     crate::github::fakes::PullRequest {
-                        number: 1,
+                        number: pr_nr,
                         base: String::from("main"),
                         head: String::from("spr/test/test-branch"),
                         sections: std::collections::BTreeMap::from([(
@@ -177,5 +209,201 @@ mod tests {
             new_main,
             "new change was based on HEAD instead of base of commit",
         )
+    }
+
+    #[tokio::test]
+    async fn stacked() {
+        let (pr_nr, other_nr) = (1, 3);
+        let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+        let commit_oid =
+            testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-branch");
+        let _ = testing::git::add_commit_on_and_push_to_remote(
+            &jj.git_repo,
+            "spr/test/other-branch",
+            [commit_oid],
+        );
+
+        super::adopt(
+            AdoptOptions {
+                pull_request: other_nr,
+                branch_name: None,
+                no_checkout: true,
+            },
+            &mut jj,
+            crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::from([
+                    (
+                        pr_nr,
+                        crate::github::fakes::PullRequest {
+                            number: 1,
+                            base: String::from("main"),
+                            head: String::from("spr/test/test-branch"),
+                            sections: std::collections::BTreeMap::from([(
+                                MessageSection::PullRequest,
+                                testing::config::basic().pull_request_url(pr_nr),
+                            )]),
+                        },
+                    ),
+                    (
+                        other_nr,
+                        crate::github::fakes::PullRequest {
+                            number: other_nr,
+                            base: String::from("spr/test/test-branch"),
+                            head: String::from("spr/test/other-branch"),
+                            sections: std::collections::BTreeMap::from([(
+                                MessageSection::PullRequest,
+                                testing::config::basic().pull_request_url(other_nr),
+                            )]),
+                        },
+                    ),
+                ]),
+            },
+            &testing::config::basic(),
+        )
+        .await
+        .expect("patch() should not fail");
+
+        let base_rev = super::find_commit_for_pr(&jj, &testing::config::basic(), pr_nr)
+            .expect("Failed to find revision for base PR");
+        assert_eq!(
+            base_rev.pull_request_number,
+            Some(pr_nr),
+            "PR # didn't match for base pr",
+        );
+        let stacked_rev = super::find_commit_for_pr(&jj, &testing::config::basic(), other_nr)
+            .expect("Failed to find revision for stacked PR");
+        assert_eq!(
+            stacked_rev.pull_request_number,
+            Some(other_nr),
+            "PR # didn't match for other pr",
+        );
+
+        let fork = jj
+            .revset_to_change_id(
+                &RevSet::from(&base_rev.id).fork_point(&RevSet::from(&stacked_rev.id)),
+            )
+            .expect("Couldn't find fork point of PR revisions");
+        assert_eq!(
+            fork, base_rev.id,
+            "stacked PR's revision was not forked from base PR"
+        );
+    }
+
+    #[tokio::test]
+    async fn partial() {
+        let (pr_nr, other_nr) = (1, 3);
+        let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+        let commit_oid =
+            testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-branch");
+        let _ = testing::git::add_commit_on_and_push_to_remote(
+            &jj.git_repo,
+            "spr/test/other-branch",
+            [commit_oid],
+        );
+
+        super::adopt(
+            AdoptOptions {
+                pull_request: pr_nr,
+                branch_name: None,
+                no_checkout: true,
+            },
+            &mut jj,
+            crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::from([
+                    (
+                        pr_nr,
+                        crate::github::fakes::PullRequest {
+                            number: 1,
+                            base: String::from("main"),
+                            head: String::from("spr/test/test-branch"),
+                            sections: std::collections::BTreeMap::from([(
+                                MessageSection::PullRequest,
+                                testing::config::basic().pull_request_url(pr_nr),
+                            )]),
+                        },
+                    ),
+                    (
+                        other_nr,
+                        crate::github::fakes::PullRequest {
+                            number: other_nr,
+                            base: String::from("spr/test/test-branch"),
+                            head: String::from("spr/test/other-branch"),
+                            sections: std::collections::BTreeMap::from([(
+                                MessageSection::PullRequest,
+                                testing::config::basic().pull_request_url(other_nr),
+                            )]),
+                        },
+                    ),
+                ]),
+            },
+            &testing::config::basic(),
+        )
+        .await
+        .expect("patch() should not fail");
+
+        super::adopt(
+            AdoptOptions {
+                pull_request: other_nr,
+                branch_name: None,
+                no_checkout: true,
+            },
+            &mut jj,
+            crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::from([
+                    (
+                        pr_nr,
+                        crate::github::fakes::PullRequest {
+                            number: 1,
+                            base: String::from("main"),
+                            head: String::from("spr/test/test-branch"),
+                            sections: std::collections::BTreeMap::from([(
+                                MessageSection::PullRequest,
+                                testing::config::basic().pull_request_url(pr_nr),
+                            )]),
+                        },
+                    ),
+                    (
+                        other_nr,
+                        crate::github::fakes::PullRequest {
+                            number: other_nr,
+                            base: String::from("spr/test/test-branch"),
+                            head: String::from("spr/test/other-branch"),
+                            sections: std::collections::BTreeMap::from([(
+                                MessageSection::PullRequest,
+                                testing::config::basic().pull_request_url(other_nr),
+                            )]),
+                        },
+                    ),
+                ]),
+            },
+            &testing::config::basic(),
+        )
+        .await
+        .expect("patch() should not fail");
+
+        let base_rev = super::find_commit_for_pr(&jj, &testing::config::basic(), pr_nr)
+            .expect("Failed to find revision for base PR");
+        assert_eq!(
+            base_rev.pull_request_number,
+            Some(pr_nr),
+            "PR # didn't match for base pr",
+        );
+        let stacked_rev = super::find_commit_for_pr(&jj, &testing::config::basic(), other_nr)
+            .expect("Failed to find revision for stacked PR");
+        assert_eq!(
+            stacked_rev.pull_request_number,
+            Some(other_nr),
+            "PR # didn't match for other pr",
+        );
+
+        let fork = jj
+            .revset_to_change_id(
+                &RevSet::from(&base_rev.id).fork_point(&RevSet::from(&stacked_rev.id)),
+            )
+            .expect("Couldn't find fork point of PR revisions");
+        assert_eq!(
+            fork, base_rev.id,
+            "stacked PR's revision was not forked from base PR"
+        );
     }
 }

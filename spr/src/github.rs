@@ -135,6 +135,15 @@ pub struct PullRequestMergeability {
     response_derives = "Debug"
 )]
 pub struct PullRequestQuery;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/gql/schema.docs.graphql",
+    query_path = "src/gql/pullrequest_by_head_query.graphql",
+    response_derives = "Debug"
+)]
+pub struct PullRequestByHeadQuery;
+
 type GitObjectID = String;
 
 #[derive(GraphQLQuery)]
@@ -169,6 +178,42 @@ impl GitHub {
             .get(team)
             .await
             .map_err(Error::from)
+    }
+
+    pub async fn get_pull_request_by_head<S>(self, head: S) -> Result<PullRequest>
+    where
+        S: Into<String>,
+    {
+        let nr = {
+            let GitHub {
+                ref config,
+                ref graphql_client,
+            } = self;
+
+            let variables = pull_request_by_head_query::Variables {
+                name: config.repo.clone(),
+                owner: config.owner.clone(),
+                head: head.into(),
+            };
+            let request_body = PullRequestByHeadQuery::build_query(variables);
+            let res = graphql_client
+                .post("https://api.github.com/graphql")
+                .json(&request_body)
+                .send()
+                .await?;
+            let response_body: Response<pull_request_query::ResponseData> = res.json().await?;
+
+            Ok(response_body
+                .data
+                .ok_or_else(|| Error::new("failed to fetch pr"))?
+                .repository
+                .ok_or_else(|| Error::new("failed to find repository"))?
+                .pull_request
+                .ok_or_else(|| Error::new("failed to find PR"))?
+                .number as u64) as Result<u64>
+        }?;
+
+        self.get_pull_request(nr).await
     }
 
     pub async fn get_pull_request(self, number: u64) -> Result<PullRequest> {
@@ -519,7 +564,14 @@ pub trait GitHubAdapter {
     fn pull_request(
         &mut self,
         number: u64,
-    ) -> impl std::future::Future<Output = crate::error::Result<Self::PRAdapter>> + Send;
+    ) -> impl std::future::Future<Output = crate::error::Result<Self::PRAdapter>>;
+
+    fn pull_request_by_head<S>(
+        &mut self,
+        head: S,
+    ) -> impl std::future::Future<Output = crate::error::Result<Self::PRAdapter>>
+    where
+        S: Into<String>;
 
     fn new_pull_request<H, B>(
         &mut self,
@@ -579,6 +631,13 @@ impl GitHubAdapter for &mut GitHub {
     type PRAdapter = PullRequest;
     async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
         self.clone().get_pull_request(number).await
+    }
+
+    async fn pull_request_by_head<S>(&mut self, head: S) -> crate::error::Result<Self::PRAdapter>
+    where
+        S: Into<String>,
+    {
+        self.clone().get_pull_request_by_head(head).await
     }
 
     async fn pull_requests<I>(
@@ -675,6 +734,22 @@ pub mod fakes {
                 })
         }
 
+        async fn pull_request_by_head<S>(
+            &mut self,
+            head: S,
+        ) -> crate::error::Result<Self::PRAdapter>
+        where
+            S: Into<String>,
+        {
+            let head = head.into();
+            self.pull_requests
+                .iter()
+                .find(|(_, pr)| pr.head == head)
+                .map_or(Err(crate::error::Error::new("No such PR")), |(_, pr)| {
+                    Ok(pr.clone())
+                })
+        }
+
         async fn new_pull_request<H, B>(
             &mut self,
             message: &MessageSectionsMap,
@@ -711,6 +786,22 @@ pub mod fakes {
             self.pull_requests
                 .get(&number)
                 .map_or(Err(crate::error::Error::new("No such PR")), |pr| {
+                    Ok(pr.clone())
+                })
+        }
+
+        async fn pull_request_by_head<S>(
+            &mut self,
+            head: S,
+        ) -> crate::error::Result<Self::PRAdapter>
+        where
+            S: Into<String>,
+        {
+            let head = head.into();
+            self.pull_requests
+                .iter()
+                .find(|(_, pr)| pr.head == head)
+                .map_or(Err(crate::error::Error::new("No such PR")), |(_, pr)| {
                     Ok(pr.clone())
                 })
         }
