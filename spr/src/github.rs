@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use git2::Oid;
 use graphql_client::{GraphQLQuery, Response};
 use octocrab::models::IssueState;
 use serde::Deserialize;
@@ -24,18 +23,13 @@ pub struct GitHub {
 
 #[derive(Debug, Clone)]
 pub struct PullRequest {
-    pub number: u64,
-    pub state: PullRequestState,
-    pub title: String,
-    pub body: Option<String>,
-    pub sections: MessageSectionsMap,
-    pub base: GitHubBranch,
-    pub head: GitHubBranch,
-    pub base_oid: git2::Oid,
-    pub head_oid: git2::Oid,
-    pub merge_commit: Option<git2::Oid>,
-    pub reviewers: HashMap<String, ReviewStatus>,
-    pub review_status: Option<ReviewStatus>,
+    number: u64,
+    state: PullRequestState,
+    title: String,
+    body: Option<String>,
+    sections: MessageSectionsMap,
+    base: GitHubBranch,
+    head: GitHubBranch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,14 +71,7 @@ impl PullRequestUpdate {
 
 impl From<octocrab::models::pulls::PullRequest> for PullRequest {
     fn from(octo_request: octocrab::models::pulls::PullRequest) -> Self {
-        let merge_commit = match octo_request.merge_commit_sha {
-            None => None,
-            Some(sha) => match Oid::from_str(sha.as_str()) {
-                Ok(oid) => Some(oid),
-                Err(_) => None,
-            },
-        };
-        return PullRequest {
+        PullRequest {
             number: octo_request.number,
             state: octo_request
                 .state
@@ -108,13 +95,7 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequest {
                 "origin",
                 "main",
             ),
-            // We trust these to be git OIDs
-            base_oid: Oid::from_str(octo_request.base.sha.as_str()).unwrap(),
-            head_oid: Oid::from_str(octo_request.head.sha.as_str()).unwrap(),
-            merge_commit: merge_commit,
-            reviewers: HashMap::new(),
-            review_status: None,
-        };
+        }
     }
 }
 
@@ -239,37 +220,6 @@ impl GitHub {
             .output()
             .await;
 
-        // Convert branch refs to OIDs
-        let base_oid = if let Ok(output) = tokio::process::Command::new("git")
-            .args(["rev-parse", base.local()])
-            .output()
-            .await
-        {
-            if output.status.success() {
-                let oid_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                git2::Oid::from_str(&oid_str).unwrap_or(git2::Oid::zero())
-            } else {
-                git2::Oid::zero()
-            }
-        } else {
-            git2::Oid::zero()
-        };
-
-        let head_oid = if let Ok(output) = tokio::process::Command::new("git")
-            .args(["rev-parse", head.local()])
-            .output()
-            .await
-        {
-            if output.status.success() {
-                let oid_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                git2::Oid::from_str(&oid_str).unwrap_or(git2::Oid::zero())
-            } else {
-                git2::Oid::zero()
-            }
-        } else {
-            git2::Oid::zero()
-        };
-
         let mut sections = parse_message(&pr.body, MessageSection::Summary);
 
         let title = pr.title.trim().to_string();
@@ -379,13 +329,6 @@ impl GitHub {
             sections,
             base,
             head,
-            base_oid,
-            head_oid,
-            reviewers,
-            review_status,
-            merge_commit: pr
-                .merge_commit
-                .and_then(|sha| git2::Oid::from_str(&sha.oid).ok()),
         })
     }
 
