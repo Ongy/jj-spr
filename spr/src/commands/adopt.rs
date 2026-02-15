@@ -119,9 +119,8 @@ where
         // The loop will continue to make sure we pull everything we need.
         pr_chain.push((next, None));
     }
-    pr_chain.reverse();
 
-    for (pr, parent) in pr_chain {
+    for (pr, parent) in pr_chain.into_iter().rev() {
         do_adopt(jj, config, pr.sections(), pr.head_branch_name(), parent)?;
     }
 
