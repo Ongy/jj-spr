@@ -72,7 +72,7 @@ fn test_help_shows_jujutsu_subcommand_identity() {
     );
 
     // Should list all main commands
-    let commands = vec!["amend", "list", "patch", "init"];
+    let commands = vec!["fetch", "list", "adopt", "init"];
     for cmd in commands {
         assert!(stdout.contains(cmd), "Help should mention {} command", cmd);
     }
@@ -81,9 +81,9 @@ fn test_help_shows_jujutsu_subcommand_identity() {
 #[test]
 fn test_subcommands_have_help() {
     let commands = vec![
-        ("amend", "commit message"),
+        ("fetch", "commit message"),
         ("list", "Pull Requests"),
-        ("patch", "branch"),
+        ("adopt", "branch"),
         ("init", "assistant"),
     ];
 
