@@ -9,7 +9,7 @@ use indoc::formatdoc;
 use lazy_regex::regex;
 
 use crate::{
-    config::{AuthTokenSource, get_auth_token_with_source, set_jj_config},
+    config::{AuthTokenSource, get_auth_token_with_source},
     error::{Error, Result, ResultExt},
     output::output,
 };
@@ -24,6 +24,7 @@ pub async fn init() -> Result<()> {
         path
     ))?;
     let config = repo.config()?;
+    let mut jj = crate::jj::Jujutsu::new(repo)?;
 
     // GitHub Personal Access Token
 
@@ -93,111 +94,146 @@ pub async fn init() -> Result<()> {
     output("👋", &formatdoc!("Hello {}!", github_user.login))?;
 
     if !reuse_token {
-        set_jj_config("spr.githubAuthToken", pat.as_str(), &path)?;
+        let scope = dialoguer::Input::<String>::new()
+            .with_prompt("Should the key be store in \"user\" or \"repo\" scope?")
+            .with_initial_text("user")
+            .interact_text()?;
+
+        let user = match scope.as_str() {
+            "user" => true,
+            "repo" => false,
+            _ => {
+                return Err(crate::error::Error::new(format!(
+                    "User provided '{}' as config scope. But only \"repo\" and \"user\" are allowed",
+                    scope
+                )));
+            }
+        };
+
+        jj.config_set("spr.githubAuthToken", pat.as_str(), user)?;
     }
 
     // Name of remote
+    let remote = match crate::config::remote_from_jj(&jj) {
+        Ok(remote) => remote,
+        Err(_) => {
+            console::Term::stdout().write_line("")?;
 
-    console::Term::stdout().write_line("")?;
+            // TODO: Improve this logic with suggestions.
+            let remote = dialoguer::Input::<String>::new()
+                .with_prompt("Name of remote for GitHub")
+                .with_initial_text("origin")
+                .interact_text()?;
 
-    output(
-        "❓",
-        &formatdoc!(
-            "What's the name of the Git remote pointing to GitHub? Usually it's
-             'origin'."
-        ),
-    )?;
+            jj.config_set("spr.githubRemoteName", &remote, false)?;
+            remote
+        }
+    };
 
-    let remote = dialoguer::Input::<String>::new()
-        .with_prompt("Name of remote for GitHub")
-        .with_initial_text(
-            config
-                .get_string("spr.githubRemoteName")
-                .ok()
-                .unwrap_or_else(|| "origin".to_string()),
-        )
-        .interact_text()?;
-    set_jj_config("spr.githubRemoteName", &remote, &path)?;
-
-    // Name of the GitHub repo
-
-    console::Term::stdout().write_line("")?;
-
-    output(
-        "❓",
-        &formatdoc!(
-            "What's the name of the GitHub repository. Please enter \
+    let owner_and_repo = match crate::config::repo_and_owner_from_jj(&jj, remote.as_ref()) {
+        Ok((repo, owner)) => format!("{}/{}", owner, repo),
+        Err(_) => {
+            // Name of the GitHub repo
+            console::Term::stdout().write_line("")?;
+            output(
+                "❓",
+                &formatdoc!(
+                    "What's the name of the GitHub repository. Please enter \
              'OWNER/REPOSITORY' (basically the bit that follow \
              'github.com/' in the address.)"
-        ),
-    )?;
+                ),
+            )?;
 
-    let url = repo.find_remote(&remote)?.url().map(String::from);
-    let regex = lazy_regex::regex!(r#"github\.com[/:]([\w\-\.]+/[\w\-\.]+?)(.git)?$"#);
-    let github_repo = config
-        .get_string("spr.githubRepository")
-        .ok()
-        .and_then(|value| if value.is_empty() { None } else { Some(value) })
-        .or_else(|| {
-            url.as_ref()
-                .and_then(|url| regex.captures(url))
-                .and_then(|caps| caps.get(1))
-                .map(|m| m.as_str().to_string())
-        })
-        .unwrap_or_default();
+            let github_repo = dialoguer::Input::<String>::new()
+                .with_prompt("GitHub repository")
+                .with_initial_text("")
+                .interact_text()?;
 
-    let github_repo = dialoguer::Input::<String>::new()
-        .with_prompt("GitHub repository")
-        .with_initial_text(github_repo)
-        .interact_text()?;
-    set_jj_config("spr.githubRepository", &github_repo, &path)?;
+            jj.config_set("spr.githubRepository", github_repo.as_str(), false)?;
+            github_repo
+        }
+    };
 
     // Master branch name (just query GitHub)
-
     let github_repo_info = octocrab
-        .get::<octocrab::models::Repository, _, _>(format!("/repos/{}", &github_repo), None::<&()>)
+        .get::<octocrab::models::Repository, _, _>(
+            format!("/repos/{}", owner_and_repo),
+            None::<&()>,
+        )
         .await?;
+    match crate::config::default_branch_from_jj(&jj) {
+        Err(_) => jj.config_set(
+            "spr.githubMasterBranch",
+            github_repo_info
+                .default_branch
+                .as_ref()
+                .map_or("main", |s| s.as_str()),
+            false,
+        )?,
+        Ok(default) => {
+            // We only have to do anything, if we suspec the guessed default is weird.
+            if !github_repo_info
+                .default_branch
+                .map_or(true, |b| b == default)
+            {
+                console::Term::stdout().write_line("")?;
+                let branch = dialoguer::Input::<String>::new()
+                    .with_prompt("What target branch do you want to use?")
+                    .with_initial_text(&default)
+                    .interact_text()?;
 
-    set_jj_config(
-        "spr.githubMasterBranch",
-        github_repo_info
-            .default_branch
-            .as_ref()
-            .map(|s| &s[..])
-            .unwrap_or("master"),
-        &path,
-    )?;
+                if branch != default {
+                    jj.config_set("spr.githubMasterBranch", branch, false)?
+                }
+            }
+        }
+    };
 
-    // Pull Request branch prefix
+    if jj.config_get("spr.branchPrefix").is_err() {
+        // Pull Request branch prefix
+        console::Term::stdout().write_line("")?;
+        let branch_prefix = config
+            .get_string("spr.branchPrefix")
+            .ok()
+            .and_then(|value| if value.is_empty() { None } else { Some(value) })
+            .unwrap_or_else(|| format!("spr/{}/", &github_user.login));
 
-    console::Term::stdout().write_line("")?;
-
-    let branch_prefix = config
-        .get_string("spr.branchPrefix")
-        .ok()
-        .and_then(|value| if value.is_empty() { None } else { Some(value) })
-        .unwrap_or_else(|| format!("spr/{}/", &github_user.login));
-
-    output(
-        "❓",
-        &formatdoc!(
-            "What prefix should be used when naming Pull Request branches?
+        output(
+            "❓",
+            &formatdoc!(
+                "What prefix should be used when naming Pull Request branches?
              Good practice is to begin with 'spr/' as a general namespace \
              for spr-managed Pull Request branches. Continuing with the \
              GitHub user name is a good idea, so there is no danger of names \
              clashing with those of other users.
              The prefix should end with a good separator character (like '/' \
              or '-'), since commit titles will be appended to this prefix."
-        ),
-    )?;
+            ),
+        )?;
 
-    let branch_prefix = dialoguer::Input::<String>::new()
-        .with_prompt("Branch prefix")
-        .with_initial_text(branch_prefix)
-        .validate_with(|input: &String| -> Result<()> { validate_branch_prefix(input) })
-        .interact_text()?;
+        let branch_prefix = dialoguer::Input::<String>::new()
+            .with_prompt("Branch prefix")
+            .with_initial_text(branch_prefix)
+            .validate_with(|input: &String| -> Result<()> { validate_branch_prefix(input) })
+            .interact_text()?;
 
-    set_jj_config("spr.branchPrefix", &branch_prefix, &path)?;
+        let scope = dialoguer::Input::<String>::new()
+            .with_prompt("Should the key be store in \"user\" or \"repo\" scope?")
+            .with_initial_text("user")
+            .interact_text()?;
+
+        let scope = match scope.as_str() {
+            "user" => true,
+            "repo" => false,
+            _ => {
+                return Err(crate::error::Error::new(format!(
+                    "User provided '{}' as config scope. But only \"repo\" and \"user\" are allowed",
+                    scope
+                )));
+            }
+        };
+        jj.config_set("spr.branchPrefix", branch_prefix, scope)?;
+    }
 
     Ok(())
 }

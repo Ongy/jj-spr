@@ -124,14 +124,12 @@ fn value_from_jj<S: AsRef<str> + Copy>(jj: &crate::jj::Jujutsu, key: S) -> Resul
     })
 }
 
-pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
-    jj: &crate::jj::Jujutsu,
-    user: F,
-) -> Result<Config> {
+pub fn remote_from_jj(jj: &crate::jj::Jujutsu) -> Result<String> {
     let trunk = jj
         .config_get("revset-aliases.\"trunk()\"")
         .unwrap_or(String::from(""));
-    let remote_name = value_from_jj(jj, "spr.githubRemoteName").or_else(|_| {
+
+    value_from_jj(jj, "spr.githubRemoteName").or_else(|_| {
         let remotes = jj.git_remote_list()?;
         let remotes: Vec<_> = remotes.lines().collect();
 
@@ -159,23 +157,13 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
                 "Cannot guess remote. There is none",
             ))
         }
-    })?;
-    let master_branch = value_from_jj(jj, "spr.githubMasterBranch").or_else(|_| {
-        let parts: Vec<_> = trunk.split('@').collect();
-        if parts.len() <= 2
-            && let Some(branch) = parts.get(0)
-        {
-            Ok(String::from(*branch))
-        } else {
-            Err(crate::error::Error::new(
-                "Unexpected trunk() alias. Cannot guess which branch is upstream",
-            ))
-        }
-    })?;
-    let branch_prefix = match value_from_jj(jj, "spr.branchPrefix") {
-        Ok(val) => Ok(val),
-        Err(_) => user().await.map(|u| format!("spr/{}/", u)),
-    }?;
+    })
+}
+
+pub fn repo_and_owner_from_jj(
+    jj: &crate::jj::Jujutsu,
+    remote_name: &str,
+) -> Result<(String, String)> {
     let remote_info = jj
         .git_remote_list()?
         .lines()
@@ -206,15 +194,47 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
     let components: Vec<_> = std::path::Path::new(repo_with_owner.as_str())
         .components()
         .collect();
-    let (owner, repo) = match (
+    match (
         components.get(0).and_then(|c| c.as_os_str().to_str()),
         components.get(1).and_then(|c| c.as_os_str().to_str()),
     ) {
-        (Some(owner), Some(repo)) => Ok((owner.into(), repo.into())),
+        (Some(owner), Some(repo)) => Ok((repo.into(), owner.into())),
         _ => Err(crate::error::Error::new(
             "Unexpected string for owner and repo...",
         )),
+    }
+}
+
+pub fn default_branch_from_jj(jj: &crate::jj::Jujutsu) -> Result<String> {
+    let trunk = jj
+        .config_get("revset-aliases.\"trunk()\"")
+        .unwrap_or(String::from(""));
+
+    value_from_jj(jj, "spr.githubMasterBranch").or_else(|_| {
+        let parts: Vec<_> = trunk.split('@').collect();
+        if parts.len() <= 2
+            && let Some(branch) = parts.get(0)
+        {
+            Ok(String::from(*branch))
+        } else {
+            Err(crate::error::Error::new(
+                "Unexpected trunk() alias. Cannot guess which branch is upstream",
+            ))
+        }
+    })
+}
+
+pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
+    jj: &crate::jj::Jujutsu,
+    user: F,
+) -> Result<Config> {
+    let remote_name = remote_from_jj(jj)?;
+    let branch_prefix = match value_from_jj(jj, "spr.branchPrefix") {
+        Ok(val) => Ok(val),
+        Err(_) => user().await.map(|u| format!("spr/{}/", u)),
     }?;
+    let master_branch = default_branch_from_jj(jj)?;
+    let (repo, owner) = repo_and_owner_from_jj(jj, remote_name.as_ref())?;
 
     Ok(Config::new(
         owner,
