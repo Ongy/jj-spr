@@ -216,7 +216,7 @@ mod tests {
         let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
         let commit_oid =
             testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-branch");
-        let _ = testing::git::add_commit_on_and_push_to_remote(
+        let stacked_oid = testing::git::add_commit_on_and_push_to_remote(
             &jj.git_repo,
             "spr/test/other-branch",
             [commit_oid],
@@ -285,6 +285,20 @@ mod tests {
         assert_eq!(
             fork, base_rev.id,
             "stacked PR's revision was not forked from base PR"
+        );
+
+        let stacked_commit = jj
+            .resolve_revision_to_commit_id(stacked_rev.id.as_ref())
+            .expect("Should be able to get oid for adopted revision");
+        let stacked_tree = jj
+            .get_tree_oid_for_commit(stacked_commit)
+            .expect("Stacked PR commit should have a tree");
+        let stacked_base_tree = jj
+            .get_tree_oid_for_commit(stacked_oid)
+            .expect("Stacked PR commit should have a tree");
+        assert_eq!(
+            stacked_tree, stacked_base_tree,
+            "Adopted revision should have the same tree as upstream branch"
         );
     }
 
@@ -294,12 +308,40 @@ mod tests {
         let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
         let commit_oid =
             testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-branch");
-        let _ = testing::git::add_commit_on_and_push_to_remote(
+        let stacked_oid = testing::git::add_commit_on_and_push_to_remote(
             &jj.git_repo,
             "spr/test/other-branch",
             [commit_oid],
         );
 
+        let gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::from([
+                (
+                    pr_nr,
+                    crate::github::fakes::PullRequest {
+                        number: 1,
+                        base: String::from("main"),
+                        head: String::from("spr/test/test-branch"),
+                        sections: std::collections::BTreeMap::from([(
+                            MessageSection::PullRequest,
+                            testing::config::basic().pull_request_url(pr_nr),
+                        )]),
+                    },
+                ),
+                (
+                    other_nr,
+                    crate::github::fakes::PullRequest {
+                        number: other_nr,
+                        base: String::from("spr/test/test-branch"),
+                        head: String::from("spr/test/other-branch"),
+                        sections: std::collections::BTreeMap::from([(
+                            MessageSection::PullRequest,
+                            testing::config::basic().pull_request_url(other_nr),
+                        )]),
+                    },
+                ),
+            ]),
+        };
         super::adopt(
             AdoptOptions {
                 pull_request: pr_nr,
@@ -307,34 +349,7 @@ mod tests {
                 no_checkout: true,
             },
             &mut jj,
-            crate::github::fakes::GitHub {
-                pull_requests: std::collections::BTreeMap::from([
-                    (
-                        pr_nr,
-                        crate::github::fakes::PullRequest {
-                            number: 1,
-                            base: String::from("main"),
-                            head: String::from("spr/test/test-branch"),
-                            sections: std::collections::BTreeMap::from([(
-                                MessageSection::PullRequest,
-                                testing::config::basic().pull_request_url(pr_nr),
-                            )]),
-                        },
-                    ),
-                    (
-                        other_nr,
-                        crate::github::fakes::PullRequest {
-                            number: other_nr,
-                            base: String::from("spr/test/test-branch"),
-                            head: String::from("spr/test/other-branch"),
-                            sections: std::collections::BTreeMap::from([(
-                                MessageSection::PullRequest,
-                                testing::config::basic().pull_request_url(other_nr),
-                            )]),
-                        },
-                    ),
-                ]),
-            },
+            gh.clone(),
             &testing::config::basic(),
         )
         .await
@@ -347,34 +362,7 @@ mod tests {
                 no_checkout: true,
             },
             &mut jj,
-            crate::github::fakes::GitHub {
-                pull_requests: std::collections::BTreeMap::from([
-                    (
-                        pr_nr,
-                        crate::github::fakes::PullRequest {
-                            number: 1,
-                            base: String::from("main"),
-                            head: String::from("spr/test/test-branch"),
-                            sections: std::collections::BTreeMap::from([(
-                                MessageSection::PullRequest,
-                                testing::config::basic().pull_request_url(pr_nr),
-                            )]),
-                        },
-                    ),
-                    (
-                        other_nr,
-                        crate::github::fakes::PullRequest {
-                            number: other_nr,
-                            base: String::from("spr/test/test-branch"),
-                            head: String::from("spr/test/other-branch"),
-                            sections: std::collections::BTreeMap::from([(
-                                MessageSection::PullRequest,
-                                testing::config::basic().pull_request_url(other_nr),
-                            )]),
-                        },
-                    ),
-                ]),
-            },
+            gh.clone(),
             &testing::config::basic(),
         )
         .await
@@ -403,6 +391,20 @@ mod tests {
         assert_eq!(
             fork, base_rev.id,
             "stacked PR's revision was not forked from base PR"
+        );
+
+        let stacked_commit = jj
+            .resolve_revision_to_commit_id(stacked_rev.id.as_ref())
+            .expect("Should be able to get oid for adopted revision");
+        let stacked_tree = jj
+            .get_tree_oid_for_commit(stacked_commit)
+            .expect("Stacked PR commit should have a tree");
+        let stacked_base_tree = jj
+            .get_tree_oid_for_commit(stacked_oid)
+            .expect("Stacked PR commit should have a tree");
+        assert_eq!(
+            stacked_tree, stacked_base_tree,
+            "Adopted revision should have the same tree as upstream branch"
         );
     }
 }
