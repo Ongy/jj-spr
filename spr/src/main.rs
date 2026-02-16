@@ -58,13 +58,13 @@ enum Commands {
     Sync(commands::sync::SyncOpts),
 
     /// Update local commit message with content on GitHub
-    Amend(commands::fetch::FetchOptions),
+    Fetch(commands::fetch::FetchOptions),
 
     /// List open Pull Requests on GitHub and their review decision
     List,
 
     /// Create a new branch with the contents of an existing Pull Request
-    Patch(commands::adopt::AdoptOptions),
+    Adopt(commands::adopt::AdoptOptions),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -139,9 +139,9 @@ pub async fn spr() -> Result<()> {
     let mut gh = jj_spr::github::GitHub::new(config.clone(), graphql_client.clone());
 
     match cli.command {
-        Commands::Amend(opts) => commands::fetch::fetch(opts, &mut jj, &mut gh, &config).await?,
+        Commands::Fetch(opts) => commands::fetch::fetch(opts, &mut jj, &mut gh, &config).await?,
         Commands::List => commands::list::list(graphql_client, &config).await?,
-        Commands::Patch(opts) => commands::adopt::adopt(opts, &mut jj, &mut gh, &config).await?,
+        Commands::Adopt(opts) => commands::adopt::adopt(opts, &mut jj, &mut gh, &config).await?,
         Commands::Push(opts) => {
             commands::push::push(&mut jj, &mut gh, &config, opts).await?
         }
