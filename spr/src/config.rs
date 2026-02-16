@@ -198,7 +198,7 @@ pub fn repo_and_owner_from_jj(
         components.get(0).and_then(|c| c.as_os_str().to_str()),
         components.get(1).and_then(|c| c.as_os_str().to_str()),
     ) {
-        (Some(owner), Some(repo)) => Ok((owner.into(), repo.into())),
+        (Some(owner), Some(repo)) => Ok((repo.into(), owner.into())),
         _ => Err(crate::error::Error::new(
             "Unexpected string for owner and repo...",
         )),

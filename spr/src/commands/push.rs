@@ -252,7 +252,6 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
-    println!("{config:?}");
     let heads = opts
         .revset
         .as_ref()
