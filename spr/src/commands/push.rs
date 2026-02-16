@@ -18,11 +18,14 @@ pub struct PushOptions {
 
     #[clap(long, short = 'a', group = "revs")]
     all: bool,
+
+    #[clap(long, short = 'f')]
+    force: bool,
 }
 
 #[cfg(test)]
 impl PushOptions {
-    fn with_message<S>(mut self, message: Option<S>) -> Self
+    pub fn with_message<S>(mut self, message: Option<S>) -> Self
     where
         S: Into<String>,
     {
@@ -30,11 +33,16 @@ impl PushOptions {
         self
     }
 
-    fn with_revset<S>(mut self, revset: Option<S>) -> Self
+    pub fn with_revset<S>(mut self, revset: Option<S>) -> Self
     where
         S: Into<String>,
     {
         self.revset = revset.map(|s| s.into());
+        self
+    }
+
+    pub fn with_force(mut self, val: bool) -> Self {
+        self.force = val;
         self
     }
 }
@@ -90,6 +98,16 @@ async fn do_push_single<H: AsRef<str>>(
         };
         output("✅", message.as_str())?;
         return Ok(());
+    }
+
+    if !opts.force
+        && let Some(old) = revision.message.get(&MessageSection::LastCommit)
+        && git2::Oid::from_str(old)? != head_oid
+    {
+        return Err(crate::error::Error::new(format!(
+            "Cannot update {}. It has an unexpected upstream.",
+            config.pull_request_url(revision.pull_request_number.unwrap_or(0))
+        )));
     }
 
     let message = if head_oid == base_oid
@@ -325,7 +343,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use crate::jj::{ChangeId, RevSet};
     use crate::testing;
     use std::fs;
@@ -963,6 +981,82 @@ mod tests {
             )
             .await
             .expect_err("Stacked should refuse to handle change with conflicts");
+        }
+    }
+
+    pub mod fore_testing {
+        use crate::testing;
+
+        pub async fn setup() -> (
+            tempfile::TempDir,
+            crate::jj::Jujutsu,
+            crate::github::fakes::GitHub,
+        ) {
+            let (temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+            super::create_jujutsu_commit(&mut jj, "Test Commit", "my change");
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("Do not expect sync to fail during setup phase");
+
+            {
+                let branch = jj
+                    .git_repo
+                    .find_branch("origin/spr/test/test-commit", git2::BranchType::Remote)
+                    .expect("Should be able to find remote branch");
+                let oid = branch
+                    .into_reference()
+                    .target()
+                    .expect("Remtoe branch should have an OID");
+
+                let _ = testing::git::add_commit_on_and_push_to_remote_file(
+                    &jj.git_repo,
+                    "spr/test/test-commit",
+                    [oid],
+                    "other-file",
+                );
+            }
+            super::amend_jujutsu_revision(&mut jj, "changed change");
+
+            (temp_dir, jj, gh)
+        }
+
+        #[tokio::test]
+        async fn fails_when_remote_is_ahead() {
+            let (_temp_dir, mut jj, mut gh) = setup().await;
+
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect_err("push should fail when upstream is ahead of what we expect");
+        }
+
+        #[tokio::test]
+        async fn force_ignores_ahead_upstream() {
+            let (_temp_dir, mut jj, mut gh) = setup().await;
+
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default()
+                    .with_message(Some("message"))
+                    .with_force(true),
+            )
+            .await
+            .expect("push should succeed with --force flag and ahead upstream");
         }
     }
 }
