@@ -11,3 +11,5 @@ pub mod list;
 pub mod adopt;
 pub mod push;
 pub mod sync;
+#[cfg(test)]
+pub mod tests;

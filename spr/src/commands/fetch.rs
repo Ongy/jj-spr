@@ -37,7 +37,7 @@ impl FetchOptions {
         self
     }
 
-    fn with_pull_code(mut self) -> Self {
+    pub fn with_pull_code(mut self) -> Self {
         self.pull_code_changes = true;
         self
     }
@@ -108,6 +108,10 @@ fn do_fetch<
                 }
 
                 jj.squash_copy(&base_revset.to(&head_revset), revision.id.clone())?;
+                let new_latest_commit = jj.resolve_revision_to_commit_id(head_revset.as_ref())?;
+                revision
+                    .message
+                    .insert(MessageSection::LastCommit, new_latest_commit.to_string());
             }
 
             for (k, v) in pull_request.sections().iter() {
@@ -280,7 +284,8 @@ mod tests {
         jj.git_repo
             .set_head_detached(trunk_oid)
             .expect("Expected to be able to checkout trunk");
-        testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-commit");
+        let new_oid =
+            testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-commit");
 
         super::fetch(
             FetchOptions::default()
@@ -321,9 +326,12 @@ mod tests {
             "Summary was not updated"
         );
         assert_eq!(
-            change.message.get(&MessageSection::LastCommit),
-            Some(&trunk_oid.to_string()),
-            "Last Commit was changed"
+            change
+                .message
+                .get(&MessageSection::LastCommit)
+                .expect("The re-read change should have a last commit"),
+            &new_oid.to_string(),
+            "fetch didn't update Last Commit tag correctly"
         );
 
         let post_amend_tree = jj

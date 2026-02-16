@@ -25,7 +25,7 @@ pub struct PushOptions {
 
 #[cfg(test)]
 impl PushOptions {
-    fn with_message<S>(mut self, message: Option<S>) -> Self
+    pub fn with_message<S>(mut self, message: Option<S>) -> Self
     where
         S: Into<String>,
     {
@@ -33,7 +33,7 @@ impl PushOptions {
         self
     }
 
-    fn with_revset<S>(mut self, revset: Option<S>) -> Self
+    pub fn with_revset<S>(mut self, revset: Option<S>) -> Self
     where
         S: Into<String>,
     {
@@ -41,7 +41,7 @@ impl PushOptions {
         self
     }
 
-    fn with_force(mut self, val: bool) -> Self {
+    pub fn with_force(mut self, val: bool) -> Self {
         self.force = val;
         self
     }
@@ -343,7 +343,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use crate::jj::{ChangeId, RevSet};
     use crate::testing;
     use std::fs;
@@ -984,10 +984,10 @@ mod tests {
         }
     }
 
-    mod fore_testing {
+    pub mod fore_testing {
         use crate::testing;
 
-        async fn setup() -> (
+        pub async fn setup() -> (
             tempfile::TempDir,
             crate::jj::Jujutsu,
             crate::github::fakes::GitHub,
@@ -1017,10 +1017,11 @@ mod tests {
                     .target()
                     .expect("Remtoe branch should have an OID");
 
-                let _ = testing::git::add_commit_on_and_push_to_remote(
+                let _ = testing::git::add_commit_on_and_push_to_remote_file(
                     &jj.git_repo,
                     "spr/test/test-commit",
                     [oid],
+                    "other-file",
                 );
             }
             super::amend_jujutsu_revision(&mut jj, "changed change");

@@ -629,7 +629,7 @@ impl GitHubAdapter for &mut GitHub {
 
 #[cfg(test)]
 pub mod fakes {
-    use crate::message::MessageSectionsMap;
+    use crate::message::{MessageSection, MessageSectionsMap};
 
     #[derive(Debug, Clone)]
     pub struct PullRequest {
@@ -736,7 +736,13 @@ pub mod fakes {
                 number: max + 1,
                 base: String::from(base_ref_name.as_ref()),
                 head: String::from(head_ref_name.as_ref()),
-                sections: message.clone(),
+                sections: message
+                    .clone()
+                    .into_iter()
+                    .filter(|(k, _)| {
+                        k != &MessageSection::LastCommit && k != &MessageSection::PullRequest
+                    })
+                    .collect(),
             };
 
             self.pull_requests.insert(pr.number, pr.clone());

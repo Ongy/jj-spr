@@ -43,12 +43,6 @@ pub fn add_commit_on_and_push_to_remote_file<B: Display, I: IntoIterator<Item = 
         flags_extended: 0,
         path: Vec::from(path.as_bytes()),
     };
-    index
-        .add_frombuffer(
-            &entry,
-            format!("change on {:?} on {}", parents, branch).as_ref(),
-        )
-        .expect("Expected to be able to read from buffer");
 
     let parent_commits: Vec<_> = parents
         .into_iter()
@@ -57,6 +51,24 @@ pub fn add_commit_on_and_push_to_remote_file<B: Display, I: IntoIterator<Item = 
                 .expect("Failed to find commit for parent")
         })
         .collect();
+
+    let parent_tree = repo.find_tree(
+        parent_commits
+            .get(0)
+            .expect("Should get at least one parent for this function")
+            .tree_id(),
+    ).expect("Should be able to find tree for parent's tree id");
+    index
+        .read_tree(&parent_tree)
+        .expect("Should be able to read parent tree");
+
+    index
+        .add_frombuffer(
+            &entry,
+            format!("change on {:?} on {}", parent_commits, branch).as_ref(),
+        )
+        .expect("Expected to be able to read from buffer");
+
     // This is stupid, but I don't know rust...
     let commit_refs: Vec<_> = parent_commits.iter().collect();
 
