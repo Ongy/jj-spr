@@ -234,7 +234,6 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
         Err(_) => user().await.map(|u| format!("spr/{}/", u)),
     }?;
     let master_branch = default_branch_from_jj(jj)?;
-
     let (repo, owner) = repo_and_owner_from_jj(jj, remote_name.as_ref())?;
 
     Ok(Config::new(

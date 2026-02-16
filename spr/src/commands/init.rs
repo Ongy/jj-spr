@@ -83,7 +83,6 @@ pub async fn init() -> Result<()> {
         if pat.is_empty() {
             return Err(Error::new("Cannot continue without an access token."));
         }
-
         pat
     };
 
