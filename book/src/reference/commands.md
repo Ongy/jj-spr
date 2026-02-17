@@ -124,7 +124,6 @@ jj spr adopt [PULL_REQUEST] [OPTIONS]
 - `PULL_REQUEST` - The Pull Request number to adopt.
 
 **Options:**
-- `--branch-name <NAME>` - Name of the branch to be created. Defaults to `PR-<number>`.
 - `--no-checkout` - Create the new branch but do not check out.
 
 **What it does:**
