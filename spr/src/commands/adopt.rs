@@ -16,10 +16,6 @@ pub struct AdoptOptions {
     /// Pull Request number
     pull_request: u64,
 
-    /// Name of the branch to be created. Defaults to `PR-<number>`
-    #[clap(long)]
-    branch_name: Option<String>,
-
     /// If given, create new branch but do not check out
     #[clap(long)]
     no_checkout: bool,
@@ -146,7 +142,6 @@ mod tests {
         super::adopt(
             AdoptOptions {
                 pull_request: pr_nr,
-                branch_name: None,
                 no_checkout: true,
             },
             &mut jj,
@@ -225,7 +220,6 @@ mod tests {
         super::adopt(
             AdoptOptions {
                 pull_request: other_nr,
-                branch_name: None,
                 no_checkout: true,
             },
             &mut jj,
@@ -345,7 +339,6 @@ mod tests {
         super::adopt(
             AdoptOptions {
                 pull_request: pr_nr,
-                branch_name: None,
                 no_checkout: true,
             },
             &mut jj,
@@ -358,7 +351,6 @@ mod tests {
         super::adopt(
             AdoptOptions {
                 pull_request: other_nr,
-                branch_name: None,
                 no_checkout: true,
             },
             &mut jj,
