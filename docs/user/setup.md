@@ -35,7 +35,7 @@ If you prefer not to use the GitHub CLI, you can manually create a personal acce
 2. Copy the generated token
 3. Run `jj spr init` and paste the token when prompted
 
-**Security note:** The token will be stored in your repository's git config (`.git/config`). Make sure this file is not accidentally committed or shared.
+**Security note:** The token will be stored in your repository's configuration.
 
 For more details on creating tokens, see the [GitHub documentation](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token).
 
@@ -55,13 +55,16 @@ jj spr init
 ```
 The defaults will be your current settings, so you can easily update what you need.
 
-**Alternative - Use git config:**
+**Alternative - Use jj config:**
 ```shell
 # View current settings
-git config --list | grep spr
+jj config list --all | grep spr
 
-# Update individual settings
-git config spr.githubAuthToken "your-new-token"
+# Update individual settings (user scope)
+jj config set --user spr.githubAuthToken "your-new-token"
+
+# Update individual settings (repo scope)
+jj config set --repo spr.githubRepository "owner/repo"
 ```
 
 For detailed configuration options, see the [Configuration Reference](../reference/configuration.md).
