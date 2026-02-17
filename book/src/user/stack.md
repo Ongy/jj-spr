@@ -2,13 +2,9 @@
 
 The differences between jj-spr's commit-based workflow and GitHub's default branch-based workflow are most apparent when you have multiple reviews in flight at the same time.
 
-This guide assumes you're already familiar with the workflow for [simple, non-stacked PRs](./simple.md).
-
-## Dependent Stacks
-
 In Jujutsu, managing stacked changes is natural because Jujutsu maintains stable change IDs and automatically handles rebasing operations.
 
-### Creating Dependent Changes
+## Dependent Stacks
 
 This is for when the second change literally won't work without the first.
 
@@ -30,12 +26,12 @@ This is for when the second change literally won't work without the first.
    - `@` = "Add user profile endpoints" (second PR change)
    - `@-` = "Add authentication module" (first PR change)
 
-4. Run `jj spr push --all` to create PRs for all changes in your stack:
+4. Run `jj spr push` to create PRs for the entire stack:
    ```shell
-   jj spr push --all
+   jj spr push
    ```
 
-   This will create a PR for each change in your stack from `@` back to `main@origin`.
+   > **Note:** `jj spr push` treats the current revision (`@`) as the head and **automatically processes all its mutable ancestors** that have descriptions. This means it will create or update PRs for both changes in your stack with a single command.
 
 ## Understanding Your Stack
 
@@ -53,44 +49,11 @@ jj log -r 'main@origin..'
 ◆  main@origin
 ```
 
-In this example:
-- `@` = `kmkuslkw` (second change, depends on first)
-- `rlvkpnrw` = first change (base of stack)
-
-### Visual: Local Stack vs GitHub PRs
-
-Here's what the above stack looks like locally vs on GitHub:
-
-```
-Local Jujutsu State:                 GitHub State:
-
-@  kmkuslkw                     →    PR #124: "Add user profile endpoints"
-│  Add user profile endpoints        base: spr/test/add-authentication-module (PR #123's branch)
-│                                    branch: spr/test/add-user-profile-endpoints
-○  rlvkpnrw                     →    PR #123: "Add authentication module"
-│  Add authentication module         base: main
-│                                    branch: spr/test/add-authentication-module
-◆  main@origin
-```
-
-**Key points:**
-- Each change has a unique ID (`rlvkpnrw`, `kmkuslkw`)
-- jj-spr creates GitHub branches automatically.
-- Stacked PRs: PR #124 is based on PR #123's branch.
-- When PR #123 lands, PR #124 automatically updates its base on GitHub (handled by GitHub if you land via the UI).
+In this example, running `jj spr push` will create or update PRs for both `kmkuslkw` and `rlvkpnrw`.
 
 ## Updating Changes in the Stack
 
 Suppose you need to update the first change (authentication module with ID `rlvkpnrw`) in response to review feedback.
-
-**Step 1: Find the change ID**
-
-First, identify which change you want to edit:
-```shell
-jj log -r 'main@origin..'
-```
-
-**Method: Direct editing (jj edit)**
 
 1. Edit the change directly:
    ```shell
@@ -98,12 +61,14 @@ jj log -r 'main@origin..'
    # Make your changes...
    ```
 
-2. The changes are automatically absorbed. Jujutsu will automatically rebase descendant changes.
+2. Jujutsu will automatically rebase descendant changes (like `kmkuslkw`).
 
-3. Update the PR for that specific change:
+3. Update the PRs for the stack:
    ```shell
    jj spr push
    ```
+   
+   Since `jj spr push` operates on ancestors, it will update the PR for `rlvkpnrw` and also ensure `kmkuslkw` is correctly updated on GitHub with its new base.
 
 4. Return to your top change:
    ```shell
@@ -125,7 +90,7 @@ Using our example stack where `rlvkpnrw` (auth module) is the parent and `kmkusl
    jj spr sync
    ```
 
-   `jj spr sync` will:
+   `jj spr sync` operates on the entire stack of ancestors for your current head. It will:
    - Abandon the merged `rlvkpnrw` commit.
    - Rebase `kmkuslkw` onto the updated `main@origin`.
    - Now `kmkuslkw` is based directly on `main`.
@@ -134,39 +99,14 @@ Using our example stack where `rlvkpnrw` (auth module) is the parent and `kmkusl
    ```shell
    jj spr push
    ```
-   This ensures GitHub knows the new base for the remaining PRs.
+   This ensures GitHub knows the new base for the remaining PRs in your stack.
 
 ## Rebasing the Whole Stack
 
-One of the major advantages of Jujutsu is that rebasing your entire stack onto new upstream changes is trivial:
-
-1. Fetch the latest changes:
-   ```shell
-   jj git fetch
-   ```
-
-2. Rebase your stack:
-   ```shell
-   jj rebase -s <root-change-id> -d main@origin
-   ```
-
-   Where `<root-change-id>` is the first change in your stack.
-
-3. Update all PRs:
-   ```shell
-   jj spr push --all
-   ```
-
-## Working with Revsets
-
-Jujutsu's revset language makes it easy to work with stacks:
+One of the major advantages of Jujutsu is that rebasing your entire stack onto new upstream changes is trivial. After rebasing locally, simply run:
 
 ```shell
-# Show all your changes not yet in main
-jj log -r 'mine() & ~main@origin'
-
-# Create PRs for all your ready changes
-jj spr push --all -r 'mine() & ~main@origin'
+jj spr push
 ```
 
-The Jujutsu + jj-spr workflow makes stacked PRs feel natural and eliminates much of the complexity found in traditional Git-based stacking workflows.
+This will update all PRs in the stack to reflect their new state and base branches on GitHub.

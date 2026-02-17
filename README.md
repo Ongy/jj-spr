@@ -67,60 +67,45 @@ jj new main@origin
 echo "new feature" > feature.txt
 jj describe -m "Add new feature"
 
-# 2. Submit for review
-jj spr push  # Creates PR for @
+# 2. Submit for review (operates on @ and all its ancestors)
+jj spr push
 
 # 3. Amend based on feedback
 echo "updated feature" > feature.txt
 jj describe  # Edit description if needed
-jj spr push  # Updates PR with new commit (reviewers see clean diff)
+jj spr push  # Updates PR(s) in the stack
 
 # 4. Land when approved via GitHub UI (e.g. Squash and Merge)
 
-# 5. Sync after landing
+# 5. Sync after landing (cleans up the entire stack)
 jj spr sync
 ```
 
 ## Key Concepts
 
 - **`@`** = your working copy (where you make edits)
-- **`jj spr push`** defaults to `@` (your current working copy)
+- **`jj spr push`** treatment: It treates specified revision(s) as heads and operates on them and all their **mutable ancestors** that have descriptions.
 - **Change IDs** remain stable through rebases, keeping PRs linked
 
 ## Commands
 
 ### Core Commands
 
-- **`jj spr push`** - Create or update a pull request
+- **`jj spr push`** - Create or update pull requests for a stack of changes
+  - Operates on ancestors: `@` by default, or specified via `-r`
   - Updates create new commits on GitHub (reviewers see clean diffs)
-  - Supports single changes or ranges: `-r @`, `-r main..@`, `--all`
 
-- **`jj spr sync`** - Cleanup and rebase after landing PRs on GitHub
+- **`jj spr sync`** - Cleanup and rebase a stack after landing PRs on GitHub
+  - Operates on ancestors: `@` by default, or specified via `-r`
   - Abandons local commits for merged/closed PRs
-  - Rebases your work onto latest upstream main
+  - Rebases remaining work in the stack onto latest upstream main
 
-- **`jj spr fetch`** - Update local commit message from GitHub
+- **`jj spr fetch`** - Update local commit messages in a stack from GitHub
   - Use `--pull-code-changes` to also pull code updates from GitHub
 
 - **`jj spr list`** - List open pull requests and their status
 
-- **`jj spr adopt`** - Pull an existing PR from GitHub into your local repo
-
-### Examples
-
-```bash
-# Single PR workflow
-jj spr push                    # Create/update PR for @
-
-# Stacked PRs (dependent)
-jj spr push --all              # Create PRs for all changes in the stack
-
-# Syncing back changes from GitHub UI
-jj spr fetch                   # Update local commit message from PR
-
-# Cleanup after landing
-jj spr sync                    # Fetch, abandon merged commits, and rebase
-```
+- **`jj spr adopt`** - Pull an existing PR (and its chain) from GitHub into your local repo
 
 ## Documentation
 

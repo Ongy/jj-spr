@@ -28,6 +28,7 @@ If you're coming from Git, the key difference is that Jujutsu uses "changes" wit
 
 ### Reference Guide
 - [Configuration](./reference/configuration.md)
+- [Commands](./reference/commands.md)
 
 ## Quick Start
 
@@ -51,23 +52,23 @@ jj new main
 # ... edit your files ...
 jj describe -m "Add authentication feature"
 
-# 5. Create a PR (operates on @)
+# 5. Create a PR (operates on @ and all its ancestors)
 jj spr push
 
 # 6. Make updates if needed
 # ... edit your files ...
-jj spr push  # Updates the PR with the new changes
+jj spr push  # Updates the PR(s) in the stack
 
 # 7. Land on GitHub UI when approved
 
-# 8. Sync your local repo
+# 8. Sync your local stack
 jj spr sync
 ```
 
 **Key concepts:**
 - `@` = your working copy (where you edit)
-- `jj spr push` creates/updates PRs
-- `jj spr sync` cleans up and rebases after landing
+- `jj spr push` creates/updates PRs for the current head and its ancestors
+- `jj spr sync` cleans up and rebases the entire stack after landing
 
 See the guides below for detailed explanations.
 

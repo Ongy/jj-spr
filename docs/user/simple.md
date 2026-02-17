@@ -9,12 +9,8 @@ Before diving into the workflow, it's crucial to understand Jujutsu's revision s
 - **`@`** = your **working copy** (the current state where you make edits)
 - **`@-`** = the **parent** of your working copy (typically your last committed change)
 
-**After running `jj commit`:**
-- Your committed change moves to `@-`
-- Your working copy `@` becomes empty (ready for new work)
-
 **Why this matters for jj-spr:**
-- `jj spr push` defaults to operating on **`@`** (your current working copy)
+- `jj spr push` operates on **`@` and all its mutable ancestors**.
 
 **When in doubt:** Run `jj log` to see your revision history and where you are.
 
@@ -58,7 +54,7 @@ In this example:
    jj spr push
    ```
 
-   > **Note:** By default, `push` operates on `@` (the current working copy).
+   > **Note:** By default, `push` treats `@` as the head and operates on it and all its mutable ancestors that have descriptions.
 
 5. Wait for reviewers to approve. If you need to make changes:
 
@@ -72,8 +68,6 @@ In this example:
       jj spr push -m "Address review comments"
       ```
 
-      This will update the PR with the new version of your change. You can pass an update message on the command line using the `--message`/`-m` flag.
-
 6. Once your PR is approved, land it using the GitHub UI (e.g., "Squash and merge").
 
 7. **After landing, run `jj spr sync` to clean up and rebase:**
@@ -81,17 +75,17 @@ In this example:
    jj spr sync
    ```
 
-   > ⚠️ **IMPORTANT:** `jj spr sync` will:
+   > ⚠️ **IMPORTANT:** `jj spr sync` operates on your current head (`@`) and all its ancestors. It will:
    > - Fetch the latest changes from GitHub.
-   > - Abandon your local commit since it has been merged.
-   > - Rebases your work onto the latest `main@origin`.
+   > - Abandon any local commits in the stack that have been merged/closed on GitHub.
+   > - Rebase the remaining work in your stack onto the latest `main@origin`.
 
 ## Working with Change IDs
 
-In Jujutsu, every change has a stable change ID (like `qpvuntsm`). You can use these IDs to refer to specific changes:
+In Jujutsu, every change has a stable change ID (like `qpvuntsm`). You can use these IDs to refer to specific changes as heads:
 
 ```shell
-# Create a PR for a specific change
+# Create/update PRs for a specific change and its ancestors
 jj spr push -r qpvuntsm
 ```
 
@@ -115,73 +109,8 @@ If there are conflicts with upstream `main`, you should resolve them locally:
    jj rebase -d main@origin
    ```
 
-2. Resolve any conflicts:
-   ```shell
-   # Jujutsu will mark conflicts in the files
-   # Edit the files to resolve conflicts
-   ```
+2. Resolve any conflicts.
 
-3. Run `jj spr push` to update the PR:
-   ```shell
-   jj spr push
-   ```
+3. Run `jj spr push` to update the PR.
 
 4. Now the PR can be merged on GitHub.
-
-## Quick workflow
-
-```shell
-# 1. Create a new change and make your edits
-jj new main@origin
-# ... make changes ...
-
-# 2. Describe your change
-jj describe -m "Add feature"
-
-# 3. Create PR (operates on @)
-jj spr push
-
-# 4. Make updates if needed
-# ... edit files ...
-jj spr push -m "Fix bug"  # Update the PR
-
-# 5. After approval, land on GitHub UI
-
-# 6. Sync and clean up
-jj spr sync
-```
-
-## Troubleshooting
-
-### "I ran `jj spr push` but nothing happened" or "No changes to push"
-
-**Cause:** Your change might be at a different revision than `@` (the default).
-
-**Solutions:**
-1. Check where your changes are:
-   ```shell
-   jj log
-   ```
-
-2. If your change is at `@-`:
-   ```shell
-   jj spr push -r @-
-   ```
-
-### "I forgot to sync after landing"
-
-**Problem:** After landing on GitHub, your local commit still exists and is not based on the new `main`.
-
-**Solution:**
-```shell
-jj spr sync
-```
-
-### "The PR content doesn't match what will be landed"
-
-**Cause:** You've made local changes (like rebasing) without updating the PR.
-
-**Solution:**
-```shell
-jj spr push  # Update the PR to match local state
-```
