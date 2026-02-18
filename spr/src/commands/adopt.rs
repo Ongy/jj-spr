@@ -67,7 +67,7 @@ fn do_adopt(
         RevSet::description(format!("substring:\"{}\"", url)).unique()
     } else {
         let base_branch = jj.git_repo.find_branch(
-            format!("{}/{}", config.remote_name, config.master_ref.branch_name()).as_str(),
+            format!("{}/{}", config.remote_name, config.master_ref).as_str(),
             git2::BranchType::Remote,
         )?;
         RevSet::from_remote_branch(&base_branch, config.remote_name.clone())?
@@ -105,7 +105,7 @@ where
 
     pr_chain.push((pr, None));
     while let Some(last) = pr_chain.last_mut()
-        && last.0.base_branch_name() != config.master_ref.branch_name()
+        && last.0.base_branch_name() != config.master_ref
     {
         let next = gh.pull_request_by_head(last.0.base_branch_name()).await?;
         last.1 = Some(next.pr_number());

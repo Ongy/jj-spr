@@ -7,14 +7,14 @@
 
 use std::collections::HashSet;
 
-use crate::{error::Result, github::GitHubBranch, utils::slugify};
+use crate::{error::Result, utils::slugify};
 
 #[derive(Clone, Debug)]
 pub struct Config {
     pub owner: String,
     pub repo: String,
     pub remote_name: String,
-    pub master_ref: GitHubBranch,
+    pub master_ref: String,
     pub branch_prefix: String,
 }
 
@@ -23,11 +23,9 @@ impl Config {
         owner: String,
         repo: String,
         remote_name: String,
-        master_branch: String,
+        master_ref: String,
         branch_prefix: String,
     ) -> Self {
-        let master_ref =
-            GitHubBranch::new_from_branch_name(&master_branch, &remote_name, &master_branch);
         Self {
             owner,
             repo,
@@ -81,7 +79,7 @@ impl Config {
     ) -> String {
         self.find_unused_branch_name(
             existing_ref_names,
-            &format!("{}.{}", self.master_ref.branch_name(), &slugify(title)),
+            &format!("{}.{}", self.master_ref, &slugify(title)),
         )
     }
 
@@ -101,18 +99,6 @@ impl Config {
             suffix += 1;
             branch_name = format!("{branch_prefix}{slug}-{suffix}");
         }
-    }
-
-    pub fn new_github_branch_from_ref(&self, ghref: &str) -> Result<GitHubBranch> {
-        GitHubBranch::new_from_ref(ghref, &self.remote_name, self.master_ref.branch_name())
-    }
-
-    pub fn new_github_branch(&self, branch_name: &str) -> GitHubBranch {
-        GitHubBranch::new_from_branch_name(
-            branch_name,
-            &self.remote_name,
-            self.master_ref.branch_name(),
-        )
     }
 }
 
@@ -533,7 +519,7 @@ mod tests {
                 "Failed to build default branch prefix"
             );
             assert_eq!(
-                config.master_ref.branch_name(),
+                config.master_ref,
                 "main",
                 "Failed to guess default target branch"
             );
@@ -564,7 +550,7 @@ mod tests {
                 "Failed to build default branch prefix"
             );
             assert_eq!(
-                config.master_ref.branch_name(),
+                config.master_ref,
                 "dev",
                 "Failed to guess default target branch"
             );
@@ -609,7 +595,7 @@ mod tests {
                 "Failed to read branch prefix from config"
             );
             assert_eq!(
-                config.master_ref.branch_name(),
+                config.master_ref,
                 "branch",
                 "Failed to read target branch from config"
             );
