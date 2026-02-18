@@ -113,11 +113,12 @@ impl GitHub {
     where
         S: Into<String>,
     {
+        let head = head.into();
         let octo_prs = self
             .crab
             .pulls(self.config.owner.clone(), self.config.repo.clone())
             .list()
-            .base(head)
+            .base(head.clone())
             .per_page(10)
             .send()
             .await?;
@@ -129,7 +130,10 @@ impl GitHub {
         if let Some(pr) = octo_prs.items.into_iter().next() {
             Ok(PullRequest::from(pr))
         } else {
-            Err(crate::error::Error::new("Couldn't find a parent PR"))
+            Err(crate::error::Error::new(format!(
+                "Couldn't find a PR for branch {}",
+                head
+            )))
         }
     }
 
