@@ -8,7 +8,7 @@
 use octocrab::models::IssueState;
 
 use crate::{
-    error::{Error, Result},
+    error::Result,
     message::{MessageSection, MessageSectionsMap, build_github_body},
 };
 use std::collections::BTreeMap;
@@ -26,8 +26,8 @@ pub struct PullRequest {
     title: String,
     body: Option<String>,
     sections: MessageSectionsMap,
-    base: GitHubBranch,
-    head: GitHubBranch,
+    base: String,
+    head: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,16 +83,8 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequest {
             title: octo_request.title.unwrap_or("".into()),
             body: octo_request.body,
             sections: BTreeMap::new(),
-            base: GitHubBranch::new_from_branch_name(
-                octo_request.base.ref_field.as_str(),
-                "origin",
-                "main",
-            ),
-            head: GitHubBranch::new_from_branch_name(
-                octo_request.head.ref_field.as_str(),
-                "origin",
-                "main",
-            ),
+            base: octo_request.base.ref_field,
+            head: octo_request.head.ref_field,
         }
     }
 }
@@ -187,69 +179,6 @@ impl GitHub {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct GitHubBranch {
-    ref_on_github: String,
-    ref_local: String,
-    is_master_branch: bool,
-}
-
-impl GitHubBranch {
-    pub fn new_from_ref(ghref: &str, remote_name: &str, master_branch_name: &str) -> Result<Self> {
-        let ref_on_github = if ghref.starts_with("refs/heads/") {
-            ghref.to_string()
-        } else if ghref.starts_with("refs/") {
-            return Err(Error::new(format!(
-                "Ref '{ghref}' does not refer to a branch"
-            )));
-        } else {
-            format!("refs/heads/{ghref}")
-        };
-
-        // The branch name is `ref_on_github` with the `refs/heads/` prefix
-        // (length 11) removed
-        let branch_name = &ref_on_github[11..];
-        let ref_local = format!("refs/remotes/{remote_name}/{branch_name}");
-        let is_master_branch = branch_name == master_branch_name;
-
-        Ok(Self {
-            ref_on_github,
-            ref_local,
-            is_master_branch,
-        })
-    }
-
-    pub fn new_from_branch_name(
-        branch_name: &str,
-        remote_name: &str,
-        master_branch_name: &str,
-    ) -> Self {
-        Self {
-            ref_on_github: format!("refs/heads/{branch_name}"),
-            ref_local: format!("refs/remotes/{remote_name}/{branch_name}"),
-            is_master_branch: branch_name == master_branch_name,
-        }
-    }
-
-    pub fn on_github(&self) -> &str {
-        &self.ref_on_github
-    }
-
-    pub fn local(&self) -> &str {
-        &self.ref_local
-    }
-
-    pub fn is_master_branch(&self) -> bool {
-        self.is_master_branch
-    }
-
-    pub fn branch_name(&self) -> &str {
-        // The branch name is `ref_on_github` with the `refs/heads/` prefix
-        // (length 11) removed
-        &self.ref_on_github[11..]
-    }
-}
-
 pub trait GHPullRequest {
     fn head_branch_name(&self) -> &str;
     fn base_branch_name(&self) -> &str;
@@ -307,11 +236,11 @@ pub trait GitHubAdapter {
 
 impl GHPullRequest for PullRequest {
     fn head_branch_name(&self) -> &str {
-        self.head.branch_name()
+        self.head.as_ref()
     }
 
     fn base_branch_name(&self) -> &str {
-        self.base.branch_name()
+        self.base.as_ref()
     }
 
     fn pr_number(&self) -> u64 {
@@ -541,93 +470,5 @@ pub mod fakes {
 
             Ok(pr)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // Note this useful idiom: importing names from outer (for mod tests) scope.
-    use super::*;
-
-    #[test]
-    fn test_new_from_ref_with_branch_name() {
-        let r = GitHubBranch::new_from_ref("foo", "github-remote", "masterbranch").unwrap();
-        assert_eq!(r.on_github(), "refs/heads/foo");
-        assert_eq!(r.local(), "refs/remotes/github-remote/foo");
-        assert_eq!(r.branch_name(), "foo");
-        assert!(!r.is_master_branch());
-    }
-
-    #[test]
-    fn test_new_from_ref_with_master_branch_name() {
-        let r =
-            GitHubBranch::new_from_ref("masterbranch", "github-remote", "masterbranch").unwrap();
-        assert_eq!(r.on_github(), "refs/heads/masterbranch");
-        assert_eq!(r.local(), "refs/remotes/github-remote/masterbranch");
-        assert_eq!(r.branch_name(), "masterbranch");
-        assert!(r.is_master_branch());
-    }
-
-    #[test]
-    fn test_new_from_ref_with_ref_name() {
-        let r =
-            GitHubBranch::new_from_ref("refs/heads/foo", "github-remote", "masterbranch").unwrap();
-        assert_eq!(r.on_github(), "refs/heads/foo");
-        assert_eq!(r.local(), "refs/remotes/github-remote/foo");
-        assert_eq!(r.branch_name(), "foo");
-        assert!(!r.is_master_branch());
-    }
-
-    #[test]
-    fn test_new_from_ref_with_master_ref_name() {
-        let r =
-            GitHubBranch::new_from_ref("refs/heads/masterbranch", "github-remote", "masterbranch")
-                .unwrap();
-        assert_eq!(r.on_github(), "refs/heads/masterbranch");
-        assert_eq!(r.local(), "refs/remotes/github-remote/masterbranch");
-        assert_eq!(r.branch_name(), "masterbranch");
-        assert!(r.is_master_branch());
-    }
-
-    #[test]
-    fn test_new_from_branch_name() {
-        let r = GitHubBranch::new_from_branch_name("foo", "github-remote", "masterbranch");
-        assert_eq!(r.on_github(), "refs/heads/foo");
-        assert_eq!(r.local(), "refs/remotes/github-remote/foo");
-        assert_eq!(r.branch_name(), "foo");
-        assert!(!r.is_master_branch());
-    }
-
-    #[test]
-    fn test_new_from_master_branch_name() {
-        let r = GitHubBranch::new_from_branch_name("masterbranch", "github-remote", "masterbranch");
-        assert_eq!(r.on_github(), "refs/heads/masterbranch");
-        assert_eq!(r.local(), "refs/remotes/github-remote/masterbranch");
-        assert_eq!(r.branch_name(), "masterbranch");
-        assert!(r.is_master_branch());
-    }
-
-    #[test]
-    fn test_new_from_ref_with_edge_case_ref_name() {
-        let r = GitHubBranch::new_from_ref(
-            "refs/heads/refs/heads/foo",
-            "github-remote",
-            "masterbranch",
-        )
-        .unwrap();
-        assert_eq!(r.on_github(), "refs/heads/refs/heads/foo");
-        assert_eq!(r.local(), "refs/remotes/github-remote/refs/heads/foo");
-        assert_eq!(r.branch_name(), "refs/heads/foo");
-        assert!(!r.is_master_branch());
-    }
-
-    #[test]
-    fn test_new_from_edge_case_branch_name() {
-        let r =
-            GitHubBranch::new_from_branch_name("refs/heads/foo", "github-remote", "masterbranch");
-        assert_eq!(r.on_github(), "refs/heads/refs/heads/foo");
-        assert_eq!(r.local(), "refs/remotes/github-remote/refs/heads/foo");
-        assert_eq!(r.branch_name(), "refs/heads/foo");
-        assert!(!r.is_master_branch());
     }
 }

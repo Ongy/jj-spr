@@ -198,7 +198,7 @@ where
             config.get_new_branch_name(&jj.get_all_ref_names()?, title)
         };
         let base_ref = if let Some(ref pr) = maybe_pr {
-            if pr.base_branch_name() == config.master_ref.branch_name() {
+            if pr.base_branch_name() == config.master_ref {
                 Some(trunk_oid.to_string())
             } else {
                 Some(format!("{}/{}", config.remote_name, pr.base_branch_name()))
@@ -235,7 +235,7 @@ where
                     r.strip_prefix(format!("{}/", config.remote_name).as_str())
                         .map(|s| s.into())
                 })
-                .unwrap_or(config.master_ref.branch_name().to_string()),
+                .unwrap_or(config.master_ref.clone()),
             existing_nr: maybe_pr.map(|pr| pr.pr_number()),
         });
     }
@@ -898,7 +898,7 @@ pub mod tests {
                 )
                 .expect("Couldn't get PR from right revision")
                 .base,
-            testing::config::basic().master_ref.branch_name(),
+            testing::config::basic().master_ref,
             "Right revision PR was created to wrong branch"
         );
         assert_ne!(
@@ -910,7 +910,7 @@ pub mod tests {
                 )
                 .expect("Couldn't get PR from left revision")
                 .base,
-            testing::config::basic().master_ref.branch_name(),
+            testing::config::basic().master_ref,
             "left revision PR was created to wrong branch"
         );
     }
