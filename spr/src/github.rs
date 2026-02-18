@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 #[derive(Clone)]
 pub struct GitHub {
     config: crate::config::Config,
+    crab: octocrab::Octocrab,
 }
 
 #[derive(Debug, Clone)]
@@ -104,8 +105,8 @@ pub enum PullRequestState {
 }
 
 impl GitHub {
-    pub fn new(config: crate::config::Config) -> Self {
-        Self { config }
+    pub fn new(config: crate::config::Config, crab: octocrab::Octocrab) -> Self {
+        Self { config, crab }
     }
 
     pub async fn get_pull_request_by_head<S>(self, head: S) -> Result<PullRequest>
@@ -113,7 +114,8 @@ impl GitHub {
         S: Into<String>,
     {
         let head = head.into();
-        let octo_prs = octocrab::instance()
+        let octo_prs = self
+            .crab
             .pulls(self.config.owner.clone(), self.config.repo.clone())
             .list()
             .base(head.clone())
@@ -128,14 +130,16 @@ impl GitHub {
         if let Some(pr) = octo_prs.items.into_iter().next() {
             Ok(PullRequest::from(pr))
         } else {
-            Err(crate::error::Error::new(
-                format!("Couldn't find a PR for branch {}", head),
-            ))
+            Err(crate::error::Error::new(format!(
+                "Couldn't find a PR for branch {}",
+                head
+            )))
         }
     }
 
     pub async fn get_pull_request(self, number: u64) -> Result<PullRequest> {
-        let octo_pr = octocrab::instance()
+        let octo_pr = self
+            .crab
             .pulls(self.config.owner.clone(), self.config.repo.clone())
             .get(number)
             .await?;
@@ -150,7 +154,8 @@ impl GitHub {
         head_ref_name: String,
         draft: bool,
     ) -> Result<PullRequest> {
-        let octo_pr = octocrab::instance()
+        let octo_pr = self
+            .crab
             .pulls(self.config.owner.clone(), self.config.repo.clone())
             .create(
                 message
@@ -168,7 +173,7 @@ impl GitHub {
     }
 
     pub async fn update_pull_request(&self, number: u64, updates: PullRequestUpdate) -> Result<()> {
-        octocrab::instance()
+        self.crab
             .patch::<octocrab::models::pulls::PullRequest, _, _>(
                 format!(
                     "/repos/{}/{}/pulls/{}",
