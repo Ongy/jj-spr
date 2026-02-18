@@ -43,6 +43,7 @@ pub struct Revision {
     pub pull_request_number: Option<u64>,
     pub title: String,
     pub message: MessageSectionsMap,
+    pub bookmarks: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -199,24 +200,30 @@ impl Jujutsu {
             "-r",
             RevSet::from(&id).unique().as_ref(),
             "--template",
-            "parents.map(|c| c.change_id()).join( \",\") ++ \"\\n\" ++ description",
+            "parents.map(|c| c.change_id()).join( \",\") ++ \"\\n\" ++ bookmarks.map(|b| b.name()).join(\",\") ++ \"\\n\" ++ description",
         ])?;
 
-        let mut parent_ids = Vec::new();
-        let (parents, description) = if let Some((parents, description)) = output.split_once("\n") {
-            (parents, description)
-        } else {
-            (output.as_str(), "")
-        };
+        let mut parts = output.splitn(3, '\n');
+        let parents_str = parts.next().unwrap_or("");
+        let bookmarks_str = parts.next().unwrap_or("");
+        let description = parts.next().unwrap_or("");
 
-        for segment in parents.split(|c| c == ',') {
+        let mut parent_ids = Vec::new();
+        for segment in parents_str.split(|c| c == ',') {
             if !segment.is_empty() {
                 let parent_id = ChangeId::from(String::from(segment));
                 parent_ids.push(parent_id)
             }
         }
 
-        let message = parse_message(&description, MessageSection::Title);
+        let mut bookmarks = Vec::new();
+        for segment in bookmarks_str.split(',') {
+            if !segment.is_empty() {
+                bookmarks.push(String::from(segment));
+            }
+        }
+
+        let message = parse_message(description, MessageSection::Title);
         let pull_request_number = message
             .get(&MessageSection::PullRequest)
             .and_then(|url| config.parse_pull_request_field(url));
@@ -233,6 +240,7 @@ impl Jujutsu {
             pull_request_number,
             title,
             message,
+            bookmarks,
         })
     }
 
@@ -513,6 +521,15 @@ impl Jujutsu {
     pub fn commit<M: AsRef<str>>(&mut self, message: M) -> Result<()> {
         let _ = self.run_captured_with_args(["commit", "--message", message.as_ref()])?;
 
+        Ok(())
+    }
+
+    pub fn bookmark_create<S: AsRef<str>>(&mut self, name: S, revision: Option<&str>) -> Result<()> {
+        let mut args = vec!["bookmark", "create", name.as_ref()];
+        if let Some(rev) = revision {
+            args.extend(["-r", rev]);
+        }
+        let _ = self.run_captured_with_args(args)?;
         Ok(())
     }
 
