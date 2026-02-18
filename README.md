@@ -20,7 +20,7 @@ A command-line tool that bridges Jujutsu's change-based workflow with GitHub's p
 
 ### For Power Users: Effortless Stacking
 - **Stack with confidence**: Create dependent or independent PRs with automatic rebase handling
-- **Land flexibly**: Use `--cherry-pick` to land PRs in any order
+- **Land flexibly**: Effortless cleanup and rebase with `jj spr sync` after landing on GitHub.
 - **Rebase trivially**: Jujutsu's stable change IDs survive rebases
 - **Review independently**: Each PR shows only its changes, not the cumulative stack
 
@@ -49,24 +49,6 @@ Configure `jj spr` as a subcommand:
 jj config set --user aliases.spr '["util", "exec", "--", "jj-spr"]'
 ```
 
-<details>
-<summary>Alternative configuration methods</summary>
-
-**Manual Configuration:**
-Add to your Jujutsu config (`~/.jjconfig.toml` or `.jj/repo/config.toml`):
-
-```toml
-[aliases]
-spr = ["util", "exec", "--", "jj-spr"]
-```
-
-**Direct Binary Path:**
-```toml
-[aliases]
-spr = ["util", "exec", "--", "/path/to/jj-spr"]
-```
-</details>
-
 ### Initial Setup
 
 1. **Initialize in your repository:**
@@ -79,155 +61,55 @@ spr = ["util", "exec", "--", "/path/to/jj-spr"]
 
 ### Basic Workflow
 
-The recommended workflow keeps an empty working copy (`@`) with PR changes at `@-`:
-
 ```bash
 # 1. Create a change
 jj new main@origin
 echo "new feature" > feature.txt
 jj describe -m "Add new feature"
 
-# 2. Move to empty working copy
-jj new  # Your PR change is now at @-
+# 2. Submit for review (operates on @ and all its ancestors)
+jj spr push
 
-# 3. Submit for review
-jj spr diff  # Creates PR for @-
-
-# 4. Amend based on feedback
+# 3. Amend based on feedback
 echo "updated feature" > feature.txt
-jj squash  # Squash changes into @-
-jj spr diff  # Updates PR with new commit (reviewers see clean diff)
+jj describe  # Edit description if needed
+jj spr push  # Updates PR(s) in the stack
 
-# 5. Land when approved
-jj spr land -r @-
+# 4. Land when approved via GitHub UI (e.g. Squash and Merge)
 
-# 6. Rebase after landing
-jj git fetch
-jj rebase -r @ -d main@origin
+# 5. Sync after landing (cleans up the entire stack)
+jj spr sync
 ```
 
 ## Key Concepts
 
 - **`@`** = your working copy (where you make edits)
-- **`@-`** = parent of working copy (your PR change)
-- **`jj spr diff`** defaults to `@-` (your completed change)
-- **`jj spr land`** defaults to `@` (working copy)
+- **`jj spr push`** treatment: It treates specified revision(s) as heads and operates on them and all their **mutable ancestors** that have descriptions.
 - **Change IDs** remain stable through rebases, keeping PRs linked
 
 ## Commands
 
 ### Core Commands
 
-- **`jj spr diff`** - Create or update a pull request
+- **`jj spr push`** - Create or update pull requests for a stack of changes
+  - Operates on ancestors: `@` by default, or specified via `-r`
   - Updates create new commits on GitHub (reviewers see clean diffs)
-  - Supports single changes or ranges: `-r @-`, `-r main..@`, `--all`
-  - Cherry-pick mode: `--cherry-pick` for independent PRs
 
-- **`jj spr land`** - Land (squash-merge) an approved pull request
-  - Supports cherry-pick mode for landing PRs in any order
-  - Requires manual rebase after landing (see docs)
+- **`jj spr sync`** - Cleanup and rebase a stack after landing PRs on GitHub
+  - Operates on ancestors: `@` by default, or specified via `-r`
+  - Abandons local commits for merged/closed PRs
+  - Rebases remaining work in the stack onto latest upstream main
+
+- **`jj spr fetch`** - Update local commit messages in a stack from GitHub
+  - Use `--pull-code-changes` to also pull code updates from GitHub
 
 - **`jj spr list`** - List open pull requests and their status
 
-- **`jj spr close`** - Close a pull request
-
-- **`jj spr amend`** - Update local commit message from GitHub
-
-### Examples
-
-```bash
-# Single PR workflow
-jj spr diff                    # Create/update PR for @-
-jj spr land -r @-              # Land the PR
-
-# Stacked PRs (dependent)
-jj spr diff --all              # Create PRs for all changes
-jj spr land -r <change-id>     # Land bottom of stack
-
-# Independent PRs
-jj spr diff --cherry-pick      # Create independent PR
-jj spr land --cherry-pick -r <id>  # Land in any order
-
-# Working with specific changes
-jj spr diff -r <change-id>     # Update specific change
-jj spr diff -r main..@         # Update range of changes
-```
-
-## Stacked Pull Requests
-
-SPR excels at handling stacked PRs with two approaches:
-
-### Independent Changes (Recommended)
-Use `--cherry-pick` for changes that don't strictly depend on each other:
-- Land in any order
-- Simpler workflow
-- Best for most use cases
-
-### Dependent Stacks
-For true dependencies where one change requires another:
-- Automatic base branch handling
-- Changes must land in order (parent → child)
-- More complex but handles true dependencies
-
-See the [stacking documentation](./docs/user/stack.md) for detailed workflows.
-
-## Configuration
-
-SPR stores configuration in your repository's git config:
-
-```bash
-# Set GitHub repository (if not auto-detected)
-git config spr.githubRepository "owner/repo"
-
-# Set branch prefix for generated branches
-git config spr.branchPrefix "yourname/spr/"
-
-# Require approval before landing
-git config spr.requireApproval true
-```
-
-## Requirements
-
-- **Repository Write Access**: You must have write permissions (collaborator status) on the target GitHub repository
-- **Jujutsu**: Colocated Git repository (`jj git init --colocate`)
-- **GitHub Access**: Personal Access Token with `repo` scope permissions
-- **Git**: Git binary in PATH
+- **`jj spr adopt`** - Pull an existing PR (and its chain) from GitHub into your local repo
 
 ## Documentation
 
 Full documentation is available at **[luciofranco.github.io/jj-spr](https://luciofranco.github.io/jj-spr/)**
-
-Quick links:
-- [Installation](https://luciofranco.github.io/jj-spr/user/installation.html) - Detailed installation instructions
-- [Setup](https://luciofranco.github.io/jj-spr/user/setup.html) - Initial configuration
-- [Simple PR Workflow](https://luciofranco.github.io/jj-spr/user/simple.html) - Single PR workflow guide
-- [Stacked PRs](https://luciofranco.github.io/jj-spr/user/stack.html) - Multi-PR workflows and stacking
-- [Commit Messages](https://luciofranco.github.io/jj-spr/user/commit-message.html) - Message format and sections
-- [Commands Reference](https://luciofranco.github.io/jj-spr/reference/commands.html) - Complete command reference
-- [Configuration](https://luciofranco.github.io/jj-spr/reference/configuration.html) - All configuration options
-
-## Contributing
-
-Contributions welcome! Please:
-
-1. Check existing issues before starting work
-2. Add tests for new functionality
-3. Follow existing code style (`cargo fmt` and `cargo clippy`)
-4. Update documentation as needed
-
-### Running Tests
-
-```bash
-# Run unit tests
-cargo test
-
-# Run integration tests (requires jj and git)
-cargo test --test '*'
-
-# Check code quality
-cargo clippy --all-features --all-targets
-cargo fmt --check
-```
 
 ## Credits
 

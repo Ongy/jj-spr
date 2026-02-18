@@ -20,7 +20,7 @@
 ### For Power Users: Effortless Stacking
 
 - **Stack with confidence**: Create dependent or independent PRs with automatic rebase handling
-- **Land flexibly**: Use `--cherry-pick` to land PRs in any order
+- **Land flexibly**: Effortless cleanup and rebase with `jj spr sync` after landing on GitHub.
 - **Rebase trivially**: Jujutsu's stable change IDs survive rebases
 - **Review independently**: Each PR shows only its changes, not the cumulative stack
 

@@ -10,7 +10,7 @@ If you've used Phabricator's `arc` or the original `spr` tool, you'll find jj-sp
 
 Before using jj-spr, you should:
 
-- **Know Jujutsu basics**: Understand core concepts like changes, change IDs, working copy (`@`), and parent (`@-`). If you're new to Jujutsu, read the [Jujutsu Tutorial](https://github.com/jj-vcs/jj/blob/main/docs/tutorial.md) first.
+- **Know Jujutsu basics**: Understand core concepts like changes, change IDs, and working copy (`@`). If you're new to Jujutsu, read the [Jujutsu Tutorial](https://github.com/jj-vcs/jj/blob/main/docs/tutorial.md) first.
 - **Understand the stacked-diff concept** (helpful but not required): Familiarity with review-per-commit workflows (like Phabricator or the original `spr` tool) helps, but you can learn as you go.
 
 If you're coming from Git, the key difference is that Jujutsu uses "changes" with stable IDs instead of commits with hashes. Each change maintains its identity even when you amend or rebase it.
@@ -25,10 +25,10 @@ If you're coming from Git, the key difference is that Jujutsu uses "changes" wit
 - [Create and Land a Simple PR](./user/simple.md)
 - [Stack Multiple PRs](./user/stack.md)
 - [Format and Update Commit Messages](./user/commit-message.md)
-- [When to Use What: Decision Guide](./user/when-to-use-what.md)
 
 ### Reference Guide
 - [Configuration](./reference/configuration.md)
+- [Commands](./reference/commands.md)
 
 ## Quick Start
 
@@ -50,51 +50,27 @@ jj spr init  # Follow prompts, you'll need a GitHub token
 # 4. Create a change
 jj new main
 # ... edit your files ...
-jj commit -m "Add authentication feature"
+jj describe -m "Add authentication feature"
 
-# 5. Create a PR (operates on @-, your new commit)
-jj spr diff
+# 5. Create a PR (operates on @ and all its ancestors)
+jj spr push
 
 # 6. Make updates if needed
-jj squash # To move changes into @-
-jj spr diff  # Updates the PR with the new changes
+# ... edit your files ...
+jj spr push  # Updates the PR(s) in the stack
 
-# 7. Land after approval
-jj spr land -r @-
+# 7. Land on GitHub UI when approved
 
-# 8. Rebase your working copy
-jj git fetch
-jj rebase -r @ -d main
+# 8. Sync your local stack
+jj spr sync
 ```
 
 **Key concepts:**
 - `@` = your working copy (where you edit)
-- `@-` = parent of working copy (your last commit)
-- `jj spr diff` creates/updates PRs
-- `jj spr land` merges approved PRs
+- `jj spr push` creates/updates PRs for the current head and its ancestors
+- `jj spr sync` cleans up and rebases the entire stack after landing
 
 See the guides below for detailed explanations.
-
-## Workflow overview
-
-In jj-spr's workflow, you send out individual changes for review, not entire branches. The recommended workflow keeps you on an empty working change while your actual PR change sits at `@-`:
-
-1. Create a new change on top of `main@origin` using `jj new main`. Make your edits and commit them with `jj commit -m "Your change description"`. This creates your PR change at `@-`.
-
-2. Jujutsu automatically creates a new empty change on top (at `@`). Run `jj spr diff` to send your change at `@-` for review on GitHub. Since `jj spr diff` defaults to operating on `@-`, it correctly targets your PR change.
-
-3. To make updates in response to feedback, simply edit your files in your working change (`@`). Jujutsu automatically tracks these changes. When ready, squash them into your PR change with `jj squash`, then run `jj spr diff` to update the PR on GitHub.
-
-   If you need to rebase onto newer upstream `main`, use `jj rebase -r @- -d main` to rebase your PR change, then run `jj spr diff` to reflect any resulting changes.
-
-4. Once reviewers have approved, run `jj spr land` (which defaults to landing `@`). Since your PR change is at `@-`, you'll need to specify it: `jj spr land -r @-`. This will put your change on top of the latest `main` and push it upstream.
-
-In practice, you're likely to have more complex situations: multiple changes being reviewed, and possibly in-review changes that depend on others. You may need to make updates to any of these changes, or land them in any order.
-
-jj-spr can handle all of that, leveraging Jujutsu's powerful features like stable change IDs and automatic rebasing. See the guides in the "How To" section for instructions on using jj-spr in those situations:
-
-- [Simple PRs](./user/simple.md): no more than one review in flight on any branch.
-- [Stacked PRs](./user/stack.md): multiple reviews in flight at once on your local `main`.
 
 ## Rationale
 
@@ -119,5 +95,3 @@ What follows from those principles is the idea that **changes, not branches, sho
 Jujutsu's model makes this natural: every change has a stable ID, can be individually addressed and modified, and maintains its identity through rebases. Why should the code review tool require branches when the VCS doesn't?
 
 Following the one-change-per-review principle maintains the invariant that any change on `main` represents a codebase that has been reviewed _in that state_, and that builds and passes tests, etc. This makes it easy to revert changes, and to bisect.
-
-[^master]: Git's default branch name is `master`, but GitHub's is now `main`, so we'll use `main` throughout this documentation.
