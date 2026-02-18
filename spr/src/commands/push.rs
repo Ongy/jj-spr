@@ -188,6 +188,8 @@ where
     for (mut revision, maybe_pr) in revisions.into_iter() {
         let head_ref: String = if let Some(ref pr) = maybe_pr {
             pr.head_branch_name().into()
+        } else if let Some(bookmark) = revision.bookmarks.first() {
+            bookmark.clone()
         } else {
             // We have to come up with something...
             let title = revision
@@ -847,6 +849,44 @@ pub mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
         assert!(pr_oid == initial_pr_oid, "PR was updated without changes");
+    }
+
+    #[tokio::test]
+    async fn test_use_existing_bookmark() {
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
+        let trunk_oid = jj
+            .git_repo
+            .refname_to_id("HEAD")
+            .expect("Failed to revparse HEAD");
+
+        let commit_id = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+        
+        // Create a bookmark for the current commit
+        jj.bookmark_create("my-custom-bookmark", Some(commit_id.as_ref()))
+            .expect("Failed to create bookmark");
+
+        let gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::push(
+            &mut jj,
+            gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_message(Some("message")),
+        )
+        .await
+        .expect("stacked shouldn't fail");
+
+        // Validate that the PR was created with the bookmark name
+        let pr_branch = bare
+            .find_branch("my-custom-bookmark", git2::BranchType::Local)
+            .expect("Expected to find branch 'my-custom-bookmark' on bare upstream");
+            
+        let pr_oid = pr_branch
+            .get()
+            .target()
+            .expect("Failed to get oid from pr branch");
+        assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
     }
 
     #[tokio::test]
