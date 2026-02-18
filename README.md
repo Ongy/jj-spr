@@ -34,7 +34,7 @@ Jujutsu encourages amending changes. GitHub's review UI breaks with force pushes
 #### From Source
 
 ```bash
-git clone https://github.com/LucioFranco/jj-spr.git
+git clone https://github.com/Ongy/jj-spr.git
 cd jj-spr
 cargo install --path spr
 ```
