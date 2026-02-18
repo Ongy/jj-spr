@@ -136,7 +136,7 @@ pub async fn spr() -> Result<()> {
         Ok(user.login)
     };
     let config = config::from_jj(&jj, user_fun).await?;
-    let mut gh = jj_spr::github::GitHub::new(config.clone(), graphql_client.clone());
+    let mut gh = jj_spr::github::GitHub::new(config.clone());
 
     match cli.command {
         Commands::Fetch(opts) => commands::fetch::fetch(opts, &mut jj, &mut gh, &config).await?,
