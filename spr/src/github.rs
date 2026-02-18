@@ -11,9 +11,9 @@ use serde::Deserialize;
 
 use crate::{
     error::{Error, Result, ResultExt},
-    message::{MessageSection, MessageSectionsMap, build_github_body, parse_message},
+    message::{MessageSection, MessageSectionsMap, build_github_body},
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 
 #[derive(Clone)]
 pub struct GitHub {
@@ -128,22 +128,6 @@ pub struct PullRequestMergeability {
     pub merge_commit: Option<git2::Oid>,
 }
 
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "src/gql/schema.docs.graphql",
-    query_path = "src/gql/pullrequest_query.graphql",
-    response_derives = "Debug"
-)]
-pub struct PullRequestQuery;
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "src/gql/schema.docs.graphql",
-    query_path = "src/gql/pullrequest_by_head_query.graphql",
-    response_derives = "Debug"
-)]
-pub struct PullRequestByHeadQuery;
-
 type GitObjectID = String;
 
 #[derive(GraphQLQuery)]
@@ -184,204 +168,32 @@ impl GitHub {
     where
         S: Into<String>,
     {
-        let GitHub {
-            ref config,
-            ref graphql_client,
-        } = self;
-
-        let variables = pull_request_by_head_query::Variables {
-            name: config.repo.clone(),
-            owner: config.owner.clone(),
-            head: head.into(),
-        };
-        let request_body = PullRequestByHeadQuery::build_query(variables);
-        let res = graphql_client
-            .post("https://api.github.com/graphql")
-            .json(&request_body)
+        let octo_prs = octocrab::instance()
+            .pulls(self.config.owner.clone(), self.config.repo.clone())
+            .list()
+            .base(head)
+            .per_page(10)
             .send()
             .await?;
 
-        let response_body: Response<pull_request_by_head_query::ResponseData> = res.json().await?;
-        let pr_iter: Vec<_> = response_body
-            .data
-            .ok_or_else(|| Error::new("failed to fetch pr"))?
-            .repository
-            .ok_or_else(|| Error::new("failed to find repository"))?
-            .pull_requests
-            .nodes
-            .into_iter()
-            .flatten()
-            .filter_map(|prs| prs)
-            .collect();
+        if octo_prs.total_count.unwrap_or(0) > 1 {
+            return Err(crate::error::Error::new("Found more than one candidate PR"));
+        }
 
-        if pr_iter.len() == 1
-            && let Some(pr) = pr_iter.first()
-        {
-            self.get_pull_request(pr.number as u64).await
+        if let Some(pr) = octo_prs.items.into_iter().next() {
+            Ok(PullRequest::from(pr))
         } else {
-            Err(Error::new("Didn't find exactly one PR with that head"))
+            Err(crate::error::Error::new("Couldn't find a parent PR"))
         }
     }
 
     pub async fn get_pull_request(self, number: u64) -> Result<PullRequest> {
-        let GitHub {
-            config,
-            graphql_client,
-        } = self;
-
-        let variables = pull_request_query::Variables {
-            name: config.repo.clone(),
-            owner: config.owner.clone(),
-            number: number as i64,
-        };
-        let request_body = PullRequestQuery::build_query(variables);
-        let res = graphql_client
-            .post("https://api.github.com/graphql")
-            .json(&request_body)
-            .send()
+        let octo_pr = octocrab::instance()
+            .pulls(self.config.owner.clone(), self.config.repo.clone())
+            .get(number)
             .await?;
-        let response_body: Response<pull_request_query::ResponseData> = res.json().await?;
 
-        if let Some(errors) = response_body.errors {
-            let error = Err(Error::new(format!("fetching PR #{number} failed")));
-            return errors
-                .into_iter()
-                .fold(error, |err, e| err.context(e.to_string()));
-        }
-
-        let pr = response_body
-            .data
-            .ok_or_else(|| Error::new("failed to fetch PR"))?
-            .repository
-            .ok_or_else(|| Error::new("failed to find repository"))?
-            .pull_request
-            .ok_or_else(|| Error::new("failed to find PR"))?;
-
-        let base = config.new_github_branch_from_ref(&pr.base_ref_name)?;
-        let head = config.new_github_branch_from_ref(&pr.head_ref_name)?;
-
-        // Fetch refs from remote using git (since we're in a colocated repo)
-        let _fetch_result = tokio::process::Command::new("git")
-            .args([
-                "fetch",
-                "--no-write-fetch-head",
-                &config.remote_name,
-                &format!("{}:{}", head.on_github(), head.local()),
-                &format!("{}:{}", base.on_github(), base.local()),
-            ])
-            .output()
-            .await;
-
-        let mut sections = parse_message(&pr.body, MessageSection::Summary);
-
-        let title = pr.title.trim().to_string();
-        sections.insert(
-            MessageSection::Title,
-            if title.is_empty() {
-                String::from("(untitled)")
-            } else {
-                title
-            },
-        );
-
-        sections.insert(MessageSection::PullRequest, config.pull_request_url(number));
-
-        let reviewers: HashMap<String, ReviewStatus> = pr
-            .latest_opinionated_reviews
-            .iter()
-            .flat_map(|all_reviews| &all_reviews.nodes)
-            .flatten()
-            .flatten()
-            .flat_map(|review| {
-                let user_name = review.author.as_ref()?.login.clone();
-                let status = match review.state {
-                    pull_request_query::PullRequestReviewState::APPROVED => ReviewStatus::Approved,
-                    pull_request_query::PullRequestReviewState::CHANGES_REQUESTED => {
-                        ReviewStatus::Rejected
-                    }
-                    _ => ReviewStatus::Requested,
-                };
-                Some((user_name, status))
-            })
-            .collect();
-
-        let review_status = match pr.review_decision {
-            Some(pull_request_query::PullRequestReviewDecision::APPROVED) => {
-                Some(ReviewStatus::Approved)
-            }
-            Some(pull_request_query::PullRequestReviewDecision::CHANGES_REQUESTED) => {
-                Some(ReviewStatus::Rejected)
-            }
-            Some(pull_request_query::PullRequestReviewDecision::REVIEW_REQUIRED) => {
-                Some(ReviewStatus::Requested)
-            }
-            _ => None,
-        };
-
-        let requested_reviewers: Vec<String> = pr.review_requests
-            .iter()
-            .flat_map(|x| &x.nodes)
-            .flatten()
-            .flatten()
-            .flat_map(|x| &x.requested_reviewer)
-            .flat_map(|reviewer| {
-              type UserType = pull_request_query::PullRequestQueryRepositoryPullRequestReviewRequestsNodesRequestedReviewer;
-              match reviewer {
-                UserType::User(user) => Some(user.login.clone()),
-                UserType::Team(team) => Some(format!("#{}", team.slug)),
-                _ => None,
-              }
-            })
-            .chain(reviewers.keys().cloned())
-            .collect::<HashSet<String>>() // de-duplicate
-            .into_iter()
-            .collect();
-
-        sections.insert(
-            MessageSection::Reviewers,
-            requested_reviewers.iter().fold(String::new(), |out, slug| {
-                if out.is_empty() {
-                    slug.to_string()
-                } else {
-                    format!("{}, {}", out, slug)
-                }
-            }),
-        );
-
-        if review_status == Some(ReviewStatus::Approved) {
-            sections.insert(
-                MessageSection::ReviewedBy,
-                reviewers
-                    .iter()
-                    .filter_map(|(k, v)| {
-                        if v == &ReviewStatus::Approved {
-                            Some(k)
-                        } else {
-                            None
-                        }
-                    })
-                    .fold(String::new(), |out, slug| {
-                        if out.is_empty() {
-                            slug.to_string()
-                        } else {
-                            format!("{}, {}", out, slug)
-                        }
-                    }),
-            );
-        }
-
-        Ok::<_, Error>(PullRequest {
-            number: pr.number as u64,
-            state: match pr.state {
-                pull_request_query::PullRequestState::OPEN => PullRequestState::Open,
-                _ => PullRequestState::Closed,
-            },
-            title: pr.title,
-            body: Some(pr.body),
-            sections,
-            base,
-            head,
-        })
+        Ok(PullRequest::from(octo_pr))
     }
 
     pub async fn create_pull_request(
