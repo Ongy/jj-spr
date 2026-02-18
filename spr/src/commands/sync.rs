@@ -77,7 +77,7 @@ where
         &revset,
         ChangeId::from(format!(
             "{}@{}",
-            config.master_ref.branch_name(),
+            config.master_ref,
             config.remote_name
         )),
     )?;

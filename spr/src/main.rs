@@ -108,11 +108,9 @@ pub async fn spr() -> Result<()> {
             .ok_or_else(|| Error::new("GitHub auth token must be configured".to_string()))?,
     };
 
-    octocrab::initialise(
-        octocrab::OctocrabBuilder::default()
-            .personal_token(github_auth_token.clone())
-            .build()?,
-    );
+    let crab = octocrab::OctocrabBuilder::default()
+        .personal_token(github_auth_token.clone())
+        .build()?;
 
     let mut headers = header::HeaderMap::new();
     headers.insert(header::ACCEPT, "application/json".parse()?);
@@ -128,23 +126,18 @@ pub async fn spr() -> Result<()> {
     let graphql_client = reqwest::Client::builder()
         .default_headers(headers)
         .build()?;
-    let user_fun = async || {
-        let octocrab = octocrab::OctocrabBuilder::default()
-            .personal_token(github_auth_token.clone())
-            .build()?;
-        let user = octocrab.current().user().await?;
+    let config = config::from_jj(&jj, async || {
+        let user = crab.current().user().await?;
         Ok(user.login)
-    };
-    let config = config::from_jj(&jj, user_fun).await?;
-    let mut gh = jj_spr::github::GitHub::new(config.clone(), graphql_client.clone());
+    })
+    .await?;
+    let mut gh = jj_spr::github::GitHub::new(config.clone(), crab);
 
     match cli.command {
         Commands::Fetch(opts) => commands::fetch::fetch(opts, &mut jj, &mut gh, &config).await?,
         Commands::List => commands::list::list(graphql_client, &config).await?,
         Commands::Adopt(opts) => commands::adopt::adopt(opts, &mut jj, &mut gh, &config).await?,
-        Commands::Push(opts) => {
-            commands::push::push(&mut jj, &mut gh, &config, opts).await?
-        }
+        Commands::Push(opts) => commands::push::push(&mut jj, &mut gh, &config, opts).await?,
         Commands::Sync(opts) => commands::sync::sync(&mut jj, &mut gh, &config, opts).await?,
         // The following commands are executed above and return from this
         // function before it reaches this match.

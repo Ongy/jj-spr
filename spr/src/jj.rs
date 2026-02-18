@@ -269,13 +269,6 @@ impl Jujutsu {
         self.prepare_commit(config, commit_oid)
     }
 
-    pub fn get_master_base_for_commit(&self, config: &Config, commit_oid: Oid) -> Result<Oid> {
-        // Find the merge base between the commit and master
-        let master_oid = self.resolve_revision_to_commit_id(config.master_ref.local())?;
-        let merge_base = self.git_repo.merge_base(commit_oid, master_oid)?;
-        Ok(merge_base)
-    }
-
     pub fn read_revision_range(&self, config: &Config, range: &RevSet) -> Result<Vec<Revision>> {
         let revisions = self.revset_to_change_ids(range)?;
 

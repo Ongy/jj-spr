@@ -79,10 +79,10 @@ fn do_fetch<
                 };
                 // When we are based on the main branch, we'll potentially rebase.
                 // This only makes sense for changes on main.
-                if pull_request.base_branch_name() == config.master_ref.branch_name() {
+                if pull_request.base_branch_name() == config.master_ref {
                     let main_revset = {
                         let main_branch = jj.git_repo.find_branch(
-                            format!("{}/{}", config.remote_name, config.master_ref.branch_name())
+                            format!("{}/{}", config.remote_name, config.master_ref)
                                 .as_str(),
                             git2::BranchType::Remote,
                         )?;
