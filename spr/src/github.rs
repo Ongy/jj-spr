@@ -5,12 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use graphql_client::{GraphQLQuery, Response};
 use octocrab::models::IssueState;
-use serde::Deserialize;
 
 use crate::{
-    error::{Error, Result, ResultExt},
+    error::{Error, Result},
     message::{MessageSection, MessageSectionsMap, build_github_body},
 };
 use std::collections::BTreeMap;
@@ -18,7 +16,6 @@ use std::collections::BTreeMap;
 #[derive(Clone)]
 pub struct GitHub {
     config: crate::config::Config,
-    graphql_client: reqwest::Client,
 }
 
 #[derive(Debug, Clone)]
@@ -99,12 +96,6 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequest {
     }
 }
 
-#[derive(serde::Serialize, Default, Debug)]
-pub struct PullRequestRequestReviewers {
-    pub reviewers: Vec<String>,
-    pub team_reviewers: Vec<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PullRequestState {
@@ -112,56 +103,9 @@ pub enum PullRequestState {
     Closed,
 }
 
-#[derive(serde::Deserialize, Debug, Clone)]
-pub struct UserWithName {
-    pub login: String,
-    pub name: Option<String>,
-    #[serde(default)]
-    pub is_collaborator: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct PullRequestMergeability {
-    pub base: GitHubBranch,
-    pub head_oid: git2::Oid,
-    pub mergeable: Option<bool>,
-    pub merge_commit: Option<git2::Oid>,
-}
-
-type GitObjectID = String;
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "src/gql/schema.docs.graphql",
-    query_path = "src/gql/pullrequest_mergeability_query.graphql",
-    response_derives = "Debug"
-)]
-pub struct PullRequestMergeabilityQuery;
-
 impl GitHub {
-    pub fn new(config: crate::config::Config, graphql_client: reqwest::Client) -> Self {
-        Self {
-            config,
-            graphql_client,
-        }
-    }
-
-    pub async fn get_github_user(login: String) -> Result<UserWithName> {
-        octocrab::instance()
-            .get::<UserWithName, _, _>(format!("/users/{}", login), None::<&()>)
-            .await
-            .map_err(Error::from)
-    }
-
-    pub async fn get_github_team(
-        owner: String,
-        team: String,
-    ) -> Result<octocrab::models::teams::Team> {
-        octocrab::instance()
-            .teams(owner)
-            .get(team)
-            .await
-            .map_err(Error::from)
+    pub fn new(config: crate::config::Config) -> Self {
+        Self { config }
     }
 
     pub async fn get_pull_request_by_head<S>(self, head: S) -> Result<PullRequest>
@@ -235,77 +179,6 @@ impl GitHub {
             .await?;
 
         Ok(())
-    }
-
-    pub async fn request_reviewers(
-        &self,
-        number: u64,
-        reviewers: PullRequestRequestReviewers,
-    ) -> Result<()> {
-        #[derive(Deserialize)]
-        struct Ignore {}
-        let _: Ignore = octocrab::instance()
-            .post(
-                format!(
-                    "/repos/{}/{}/pulls/{}/requested_reviewers",
-                    self.config.owner, self.config.repo, number
-                ),
-                Some(&reviewers),
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn get_pull_request_mergeability(
-        &self,
-        number: u64,
-    ) -> Result<PullRequestMergeability> {
-        let variables = pull_request_mergeability_query::Variables {
-            name: self.config.repo.clone(),
-            owner: self.config.owner.clone(),
-            number: number as i64,
-        };
-        let request_body = PullRequestMergeabilityQuery::build_query(variables);
-        let res = self
-            .graphql_client
-            .post("https://api.github.com/graphql")
-            .json(&request_body)
-            .send()
-            .await?;
-        let response_body: Response<pull_request_mergeability_query::ResponseData> =
-            res.json().await?;
-
-        if let Some(errors) = response_body.errors {
-            let error = Err(Error::new(format!(
-                "querying PR #{number} mergeability failed"
-            )));
-            return errors
-                .into_iter()
-                .fold(error, |err, e| err.context(e.to_string()));
-        }
-
-        let pr = response_body
-            .data
-            .ok_or_else(|| Error::new("failed to fetch PR"))?
-            .repository
-            .ok_or_else(|| Error::new("failed to find repository"))?
-            .pull_request
-            .ok_or_else(|| Error::new("failed to find PR"))?;
-
-        Ok::<_, Error>(PullRequestMergeability {
-            base: self.config.new_github_branch_from_ref(&pr.base_ref_name)?,
-            head_oid: git2::Oid::from_str(&pr.head_ref_oid)?,
-            mergeable: match pr.mergeable {
-                pull_request_mergeability_query::MergeableState::CONFLICTING => Some(false),
-                pull_request_mergeability_query::MergeableState::MERGEABLE => Some(true),
-                pull_request_mergeability_query::MergeableState::UNKNOWN => None,
-                _ => None,
-            },
-            merge_commit: pr
-                .merge_commit
-                .and_then(|sha| git2::Oid::from_str(&sha.oid).ok()),
-        })
     }
 }
 
