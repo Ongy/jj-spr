@@ -14,24 +14,26 @@ pub type MessageSectionsMap = std::collections::BTreeMap<MessageSection, String>
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub enum MessageSection {
-    Title,
-    Summary,
-    Reviewers,
-    ReviewedBy,
-    PullRequest,
+    Assignees,
     LastCommit,
+    PullRequest,
+    ReviewedBy,
+    Reviewers,
+    Summary,
+    Title,
 }
 
 pub fn message_section_label(section: &MessageSection) -> &'static str {
     use MessageSection::*;
 
     match section {
-        Title => "Title",
-        Summary => "Summary",
-        Reviewers => "Reviewers",
-        ReviewedBy => "Reviewed By",
-        PullRequest => "Pull Request",
+        Assignees => "Assignees",
         LastCommit => "Last Commit",
+        PullRequest => "Pull Request",
+        ReviewedBy => "Reviewed By",
+        Reviewers => "Reviewers",
+        Summary => "Summary",
+        Title => "Title",
     }
 }
 
@@ -39,13 +41,14 @@ pub fn message_section_by_label(label: &str) -> Option<MessageSection> {
     use MessageSection::*;
 
     match &label.to_ascii_lowercase()[..] {
-        "title" => Some(Title),
-        "summary" => Some(Summary),
+        "assignees" => Some(Assignees),
+        "last commit" => Some(LastCommit),
+        "pull request" => Some(PullRequest),
+        "reviewed by" => Some(ReviewedBy),
         "reviewer" => Some(Reviewers),
         "reviewers" => Some(Reviewers),
-        "reviewed by" => Some(ReviewedBy),
-        "pull request" => Some(PullRequest),
-        "last commit" => Some(LastCommit),
+        "summary" => Some(Summary),
+        "title" => Some(Title),
         _ => None,
     }
 }
@@ -154,6 +157,7 @@ pub fn build_commit_message(section_texts: &MessageSectionsMap) -> String {
             MessageSection::Title,
             MessageSection::Summary,
             MessageSection::Reviewers,
+            MessageSection::Assignees,
             MessageSection::ReviewedBy,
             MessageSection::PullRequest,
             MessageSection::LastCommit,

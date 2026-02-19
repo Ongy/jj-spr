@@ -110,10 +110,6 @@ pub async fn spr() -> Result<()> {
 
     let crab = octocrab::OctocrabBuilder::default()
         .personal_token(github_auth_token.clone())
-        .add_header(
-            http::header::HeaderName::from_static("x-github-next-global-id"),
-            String::from("1"),
-        )
         .build()?;
 
     let mut headers = header::HeaderMap::new();
