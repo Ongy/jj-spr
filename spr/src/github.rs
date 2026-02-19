@@ -101,7 +101,7 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequest {
                 .unwrap_or(PullRequestState::Open),
 
             title,
-            body: octo_request.body.clone(),
+            body: octo_request.body,
             sections,
             base: octo_request.base.ref_field,
             head: octo_request.head.ref_field,
