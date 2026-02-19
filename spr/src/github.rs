@@ -191,7 +191,6 @@ impl GitHub {
 
         if let Some(assignees) = message.get(&MessageSection::Assignees) {
             let mut assignee_ids = Vec::new();
-            println!("Assignees: {assignees}");
             for assignee_login in assignees.split(',').map(|s| s.trim()) {
                 let variables = user_id::Variables {
                     login: String::from(assignee_login),
@@ -199,7 +198,6 @@ impl GitHub {
 
                 let resp: graphql_client::Response<user_id::ResponseData> =
                     self.crab.graphql(&UserId::build_query(variables)).await?;
-                println!("Response: {:?}", resp);
                 if let Some(errs) = resp.errors
                     && !errs.is_empty()
                 {
@@ -220,7 +218,6 @@ impl GitHub {
                         )
                     })?
                     .id;
-                println!("Resolved {assignee_login} to {id}");
                 assignee_ids.push(id);
             }
 
@@ -237,7 +234,6 @@ impl GitHub {
                 .crab
                 .graphql(&AddAssignees::build_query(variables))
                 .await?;
-            println!("Response: {:?}", resp);
             if let Some(errs) = resp.errors
                 && !errs.is_empty()
             {
@@ -264,7 +260,6 @@ impl GitHub {
                 .crab
                 .graphql(&RequestReviews::build_query(variables))
                 .await?;
-            println!("Response: {:?}", resp);
             if let Some(errs) = resp.errors
                 && !errs.is_empty()
             {
