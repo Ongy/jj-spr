@@ -11,6 +11,7 @@ use crate::{
     error::Result,
     message::{MessageSection, MessageSectionsMap, build_github_body},
 };
+use graphql_client::GraphQLQuery;
 use std::collections::BTreeMap;
 
 #[derive(Clone)]
@@ -36,6 +37,33 @@ pub enum ReviewStatus {
     Approved,
     Rejected,
 }
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/gql/schema.docs.graphql",
+    query_path = "src/gql/add_assignees.graphql",
+    variables_derives = "Clone, Debug",
+    response_derives = "Clone, Debug"
+)]
+pub struct UserId;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/gql/schema.docs.graphql",
+    query_path = "src/gql/request_reviews.graphql",
+    variables_derives = "Clone, Debug",
+    response_derives = "Clone, Debug"
+)]
+pub struct RequestReviews;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/gql/schema.docs.graphql",
+    query_path = "src/gql/add_assignees.graphql",
+    variables_derives = "Clone, Debug",
+    response_derives = "Clone, Debug"
+)]
+pub struct AddAssignees;
 
 #[derive(serde::Serialize, Default, Debug)]
 pub struct PullRequestUpdate {
@@ -160,6 +188,89 @@ impl GitHub {
             .draft(Some(draft))
             .send()
             .await?;
+
+        if let Some(assignees) = message.get(&MessageSection::Assignees) {
+            let mut assignee_ids = Vec::new();
+            println!("Assignees: {assignees}");
+            for assignee_login in assignees.split(',').map(|s| s.trim()) {
+                let variables = user_id::Variables {
+                    login: String::from(assignee_login),
+                };
+
+                let resp: graphql_client::Response<user_id::ResponseData> =
+                    self.crab.graphql(&UserId::build_query(variables)).await?;
+                println!("Response: {:?}", resp);
+                if let Some(errs) = resp.errors
+                    && !errs.is_empty()
+                {
+                    return Err(crate::error::Error::new(format!("{:?}", errs)));
+                }
+
+                let id = resp
+                    .data
+                    .ok_or_else(|| {
+                        crate::error::Error::new(format!(
+                            "No data on UserID request for {assignee_login}"
+                        ))
+                    })?
+                    .user
+                    .ok_or_else(|| {
+                        crate::error::Error::new(
+                            "No user in data for UserId request for {assignee_login}",
+                        )
+                    })?
+                    .id;
+                println!("Resolved {assignee_login} to {id}");
+                assignee_ids.push(id);
+            }
+
+            let variables = add_assignees::Variables {
+                assignees: assignee_ids,
+                assignable_id: octo_pr
+                    .node_id
+                    .as_ref()
+                    .expect("PR should come with nodeid")
+                    .to_string(),
+            };
+
+            let resp: graphql_client::Response<add_assignees::ResponseData> = self
+                .crab
+                .graphql(&AddAssignees::build_query(variables))
+                .await?;
+            println!("Response: {:?}", resp);
+            if let Some(errs) = resp.errors
+                && !errs.is_empty()
+            {
+                return Err(crate::error::Error::new(format!("{:?}", errs)));
+            }
+        }
+
+        if let Some(reviewers) = message.get(&MessageSection::Reviewers) {
+            let variables = request_reviews::Variables {
+                pull_request_id: octo_pr
+                    .node_id
+                    .as_ref()
+                    .expect("PR should come with nodeid")
+                    .to_string(),
+                users: Some(
+                    reviewers
+                        .split(',')
+                        .map(|s| String::from(s.trim()))
+                        .collect(),
+                ),
+            };
+
+            let resp: graphql_client::Response<request_reviews::ResponseData> = self
+                .crab
+                .graphql(&RequestReviews::build_query(variables))
+                .await?;
+            println!("Response: {:?}", resp);
+            if let Some(errs) = resp.errors
+                && !errs.is_empty()
+            {
+                return Err(crate::error::Error::new(format!("{:?}", errs)));
+            }
+        }
 
         Ok(PullRequest::from(octo_pr))
     }
