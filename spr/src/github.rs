@@ -12,7 +12,6 @@ use crate::{
     message::{MessageSection, MessageSectionsMap, build_github_body},
 };
 use graphql_client::GraphQLQuery;
-use std::collections::BTreeMap;
 
 #[derive(Clone)]
 pub struct GitHub {
@@ -97,6 +96,34 @@ impl PullRequestUpdate {
 
 impl From<octocrab::models::pulls::PullRequest> for PullRequest {
     fn from(octo_request: octocrab::models::pulls::PullRequest) -> Self {
+        let title = octo_request.title.unwrap_or("Unknown Title".into());
+        let mut sections = MessageSectionsMap::from([
+            (MessageSection::Title, title.clone()),
+            (
+                MessageSection::PullRequest,
+                // This is quite unclean, but we never really care about the full URL.
+                // So for the time being, this will be wrong....
+                format!("git@github.com/Ongy/jj-spr/pulls/{}", octo_request.number),
+            ),
+        ]);
+        if let Some(ref body) = octo_request.body {
+            sections.insert(MessageSection::Summary, body.clone());
+        }
+
+        if let Some(reviewers) = octo_request.requested_reviewers
+            && !reviewers.is_empty()
+        {
+            let reviewer_logins: Vec<_> = reviewers.into_iter().map(|a| a.login).collect();
+            sections.insert(MessageSection::Reviewers, reviewer_logins.join(","));
+        }
+
+        if let Some(assignees) = octo_request.assignees
+            && !assignees.is_empty()
+        {
+            let assignee_logins: Vec<_> = assignees.into_iter().map(|a| a.login).collect();
+            sections.insert(MessageSection::Assignees, assignee_logins.join(","));
+        }
+
         PullRequest {
             number: octo_request.number,
             state: octo_request
@@ -108,9 +135,9 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequest {
                 })
                 .unwrap_or(PullRequestState::Open),
 
-            title: octo_request.title.unwrap_or("".into()),
+            title,
             body: octo_request.body,
-            sections: BTreeMap::new(),
+            sections,
             base: octo_request.base.ref_field,
             head: octo_request.head.ref_field,
         }
