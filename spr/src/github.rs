@@ -75,7 +75,7 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequest {
                 MessageSection::PullRequest,
                 // This is quite unclean, but we never really care about the full URL.
                 // So for the time being, this will be wrong....
-                format!("git@github.com/Ongy/jj-spr/pulls/{}", octo_request.number),
+                format!("https://github.com/Ongy/jj-spr/pull/{}", octo_request.number),
             ),
         ]);
         if let Some(ref body) = octo_request.body {
