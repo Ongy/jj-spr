@@ -1,0 +1,5 @@
+mutation RequestReviews($pull_request_id: String!, $users: [String!]) {
+  requestReviewsByLogin(input: {pullRequestId: $pull_request_id, union: true, userLogins: $users}) {
+    clientMutationId
+  }
+}

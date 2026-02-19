@@ -1,0 +1,11 @@
+query UserId($login: String!) {
+  user(login: $login) {
+    id
+  }
+}
+
+mutation AddAssignees($assignable_id: String!, $assignees: [String!]) {
+  addAssigneesToAssignable(input: {assignableId: $assignable_id, assigneeIDs: $assignees}) {
+    clientMutationId
+  }
+}
