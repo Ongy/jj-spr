@@ -1118,6 +1118,7 @@ dependencies = [
  "git2",
  "git2-ext",
  "graphql_client",
+ "http",
  "indoc",
  "lazy-regex",
  "octocrab",
