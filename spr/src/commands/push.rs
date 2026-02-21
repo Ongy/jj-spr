@@ -314,14 +314,28 @@ where
             continue;
         }
 
+        let title = action
+            .revision
+            .message
+            .get(&MessageSection::Title)
+            .map_or("Missing Title", |s| s.as_str());
+        let body = action
+            .revision
+            .message
+            .get(&MessageSection::Summary)
+            .map_or("", |s| s.as_str());
         let pr = gh
-            .new_pull_request(
-                &action.revision.message,
-                action.base_branch,
-                action.head_branch,
-                false,
-            )
+            .new_pull_request(title, body, action.base_branch, &action.head_branch, false)
             .await?;
+        if let Some(reviewers) = action.revision.message.get(&MessageSection::Reviewers) {
+            gh.add_reviewers(&pr, reviewers.split(",").map(|s| s.trim()))
+                .await?;
+        }
+        if let Some(assignees) = action.revision.message.get(&MessageSection::Assignees) {
+            gh.add_assignees(&pr, assignees.split(",").map(|s| s.trim()))
+                .await?;
+        }
+
         let pull_request_url = config.pull_request_url(pr.pr_number());
 
         output(
@@ -860,7 +874,7 @@ pub mod tests {
             .expect("Failed to revparse HEAD");
 
         let commit_id = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        
+
         // Create a bookmark for the current commit
         jj.bookmark_create("my-custom-bookmark", Some(commit_id.as_ref()))
             .expect("Failed to create bookmark");
@@ -881,7 +895,7 @@ pub mod tests {
         let pr_branch = bare
             .find_branch("my-custom-bookmark", git2::BranchType::Local)
             .expect("Expected to find branch 'my-custom-bookmark' on bare upstream");
-            
+
         let pr_oid = pr_branch
             .get()
             .target()
@@ -1097,6 +1111,122 @@ pub mod tests {
             )
             .await
             .expect("push should succeed with --force flag and ahead upstream");
+        }
+    }
+
+    mod user_assignments {
+        use crate::testing;
+
+        #[tokio::test]
+        async fn reviewers_are_set() {
+            let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
+            let trunk_oid = jj
+                .git_repo
+                .refname_to_id("HEAD")
+                .expect("Failed to revparse HEAD");
+
+            let _ = super::create_jujutsu_commit(
+                &mut jj,
+                "Test commit\n\nReviewers: rev1,rev2, rev3",
+                "file 1",
+            );
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            // Validate the initial push looks good
+            let pr_branch = bare
+                .find_branch("spr/test/test-commit", git2::BranchType::Local)
+                .expect("Expected to find branch on bare upstream");
+            let pr_oid = pr_branch
+                .get()
+                .target()
+                .expect("Failed to get oid from pr branch");
+            assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
+            assert!(
+                bare.merge_base(pr_oid, trunk_oid)
+                    .expect("Failed to get merge oid")
+                    == trunk_oid,
+                "PR branch was not based on trunk"
+            );
+            let revs: Vec<&str> = gh
+                .pull_requests
+                .get(&1)
+                .expect("Push must have created PR")
+                .reviewers
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+            assert_eq!(
+                revs.as_slice(),
+                &["rev1", "rev2", "rev3"],
+                "Reviewers didn't get updated"
+            )
+        }
+
+        #[tokio::test]
+        async fn assignees_are_set() {
+            let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
+            let trunk_oid = jj
+                .git_repo
+                .refname_to_id("HEAD")
+                .expect("Failed to revparse HEAD");
+
+            let _ = super::create_jujutsu_commit(
+                &mut jj,
+                "Test commit\n\nAssignees: ass1,ass2, ass3",
+                "file 1",
+            );
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            // Validate the initial push looks good
+            let pr_branch = bare
+                .find_branch("spr/test/test-commit", git2::BranchType::Local)
+                .expect("Expected to find branch on bare upstream");
+            let pr_oid = pr_branch
+                .get()
+                .target()
+                .expect("Failed to get oid from pr branch");
+            assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
+            assert!(
+                bare.merge_base(pr_oid, trunk_oid)
+                    .expect("Failed to get merge oid")
+                    == trunk_oid,
+                "PR branch was not based on trunk"
+            );
+            let revs: Vec<&str> = gh
+                .pull_requests
+                .get(&1)
+                .expect("Push must have created PR")
+                .assignees
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+            assert_eq!(
+                revs.as_slice(),
+                &["ass1", "ass2", "ass3"],
+                "Assignees didn't get updated"
+            )
         }
     }
 }

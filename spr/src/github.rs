@@ -25,7 +25,7 @@ pub struct PullRequest {
     state: PullRequestState,
     title: String,
     body: Option<String>,
-    sections: MessageSectionsMap,
+    node_id: String,
     base: String,
     head: String,
 }
@@ -96,34 +96,6 @@ impl PullRequestUpdate {
 
 impl From<octocrab::models::pulls::PullRequest> for PullRequest {
     fn from(octo_request: octocrab::models::pulls::PullRequest) -> Self {
-        let title = octo_request.title.unwrap_or("Unknown Title".into());
-        let mut sections = MessageSectionsMap::from([
-            (MessageSection::Title, title.clone()),
-            (
-                MessageSection::PullRequest,
-                // This is quite unclean, but we never really care about the full URL.
-                // So for the time being, this will be wrong....
-                format!("https://github.com/Ongy/jj-spr/pull/{}", octo_request.number),
-            ),
-        ]);
-        if let Some(ref body) = octo_request.body {
-            sections.insert(MessageSection::Summary, body.clone());
-        }
-
-        if let Some(reviewers) = octo_request.requested_reviewers
-            && !reviewers.is_empty()
-        {
-            let reviewer_logins: Vec<_> = reviewers.into_iter().map(|a| a.login).collect();
-            sections.insert(MessageSection::Reviewers, reviewer_logins.join(","));
-        }
-
-        if let Some(assignees) = octo_request.assignees
-            && !assignees.is_empty()
-        {
-            let assignee_logins: Vec<_> = assignees.into_iter().map(|a| a.login).collect();
-            sections.insert(MessageSection::Assignees, assignee_logins.join(","));
-        }
-
         PullRequest {
             number: octo_request.number,
             state: octo_request
@@ -134,10 +106,12 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequest {
                     _ => PullRequestState::Open,
                 })
                 .unwrap_or(PullRequestState::Open),
-
-            title,
+            title: octo_request.title.unwrap_or("Unknown Title".into()),
             body: octo_request.body,
-            sections,
+            node_id: octo_request
+                .node_id
+                .expect("All PRs should have a node id")
+                .into(),
             base: octo_request.base.ref_field,
             head: octo_request.head.ref_field,
         }
@@ -194,105 +168,26 @@ impl GitHub {
         Ok(PullRequest::from(octo_pr))
     }
 
-    pub async fn create_pull_request(
+    pub async fn create_pull_request<Sb, St>(
         &self,
-        message: &MessageSectionsMap,
+        title: St,
+        body: Sb,
         base_ref_name: String,
         head_ref_name: String,
         draft: bool,
-    ) -> Result<PullRequest> {
+    ) -> Result<PullRequest>
+    where
+        St: Into<String>,
+        Sb: Into<String>,
+    {
         let octo_pr = self
             .crab
             .pulls(self.config.owner.clone(), self.config.repo.clone())
-            .create(
-                message
-                    .get(&MessageSection::Title)
-                    .unwrap_or(&String::new()),
-                head_ref_name,
-                base_ref_name,
-            )
-            .body(build_github_body(message))
+            .create(title.into(), head_ref_name, base_ref_name)
+            .body(body.into())
             .draft(Some(draft))
             .send()
             .await?;
-
-        if let Some(assignees) = message.get(&MessageSection::Assignees) {
-            let mut assignee_ids = Vec::new();
-            for assignee_login in assignees.split(',').map(|s| s.trim()) {
-                let variables = user_id::Variables {
-                    login: String::from(assignee_login),
-                };
-
-                let resp: graphql_client::Response<user_id::ResponseData> =
-                    self.crab.graphql(&UserId::build_query(variables)).await?;
-                if let Some(errs) = resp.errors
-                    && !errs.is_empty()
-                {
-                    return Err(crate::error::Error::new(format!("{:?}", errs)));
-                }
-
-                let id = resp
-                    .data
-                    .ok_or_else(|| {
-                        crate::error::Error::new(format!(
-                            "No data on UserID request for {assignee_login}"
-                        ))
-                    })?
-                    .user
-                    .ok_or_else(|| {
-                        crate::error::Error::new(
-                            "No user in data for UserId request for {assignee_login}",
-                        )
-                    })?
-                    .id;
-                assignee_ids.push(id);
-            }
-
-            let variables = add_assignees::Variables {
-                assignees: assignee_ids,
-                assignable_id: octo_pr
-                    .node_id
-                    .as_ref()
-                    .expect("PR should come with nodeid")
-                    .to_string(),
-            };
-
-            let resp: graphql_client::Response<add_assignees::ResponseData> = self
-                .crab
-                .graphql(&AddAssignees::build_query(variables))
-                .await?;
-            if let Some(errs) = resp.errors
-                && !errs.is_empty()
-            {
-                return Err(crate::error::Error::new(format!("{:?}", errs)));
-            }
-        }
-
-        if let Some(reviewers) = message.get(&MessageSection::Reviewers) {
-            let variables = request_reviews::Variables {
-                pull_request_id: octo_pr
-                    .node_id
-                    .as_ref()
-                    .expect("PR should come with nodeid")
-                    .to_string(),
-                users: Some(
-                    reviewers
-                        .split(',')
-                        .map(|s| String::from(s.trim()))
-                        .collect(),
-                ),
-            };
-
-            let resp: graphql_client::Response<request_reviews::ResponseData> = self
-                .crab
-                .graphql(&RequestReviews::build_query(variables))
-                .await?;
-            if let Some(errs) = resp.errors
-                && !errs.is_empty()
-            {
-                return Err(crate::error::Error::new(format!("{:?}", errs)));
-            }
-        }
 
         Ok(PullRequest::from(octo_pr))
     }
@@ -312,14 +207,6 @@ impl GitHub {
     }
 }
 
-pub trait GHPullRequest {
-    fn head_branch_name(&self) -> &str;
-    fn base_branch_name(&self) -> &str;
-    fn pr_number(&self) -> u64;
-    fn sections(&self) -> &MessageSectionsMap;
-    fn closed(&self) -> bool;
-}
-
 pub trait GitHubAdapter {
     type PRAdapter: Send;
 
@@ -335,16 +222,19 @@ pub trait GitHubAdapter {
     where
         S: Into<String>;
 
-    fn new_pull_request<H, B>(
+    fn new_pull_request<H, B, St, Sb>(
         &mut self,
-        message: &MessageSectionsMap,
+        title: St,
+        body: Sb,
         base_ref_name: B,
         head_ref_name: H,
         draft: bool,
     ) -> impl std::future::Future<Output = crate::error::Result<Self::PRAdapter>>
     where
         H: AsRef<str>,
-        B: AsRef<str>;
+        B: AsRef<str>,
+        St: Into<String>,
+        Sb: Into<String>;
 
     fn pull_requests<I>(
         &mut self,
@@ -365,6 +255,61 @@ pub trait GitHubAdapter {
             Ok(ret)
         }
     }
+
+    fn add_reviewers<S, I>(
+        &mut self,
+        pr: &Self::PRAdapter,
+        reviewers: I,
+    ) -> impl std::future::Future<Output = crate::error::Result<()>>
+    where
+        S: Into<String>,
+        I: IntoIterator<Item = S>;
+
+    fn add_assignees<S, I>(
+        &mut self,
+        pr: &Self::PRAdapter,
+        assignees: I,
+    ) -> impl std::future::Future<Output = crate::error::Result<()>>
+    where
+        S: Into<String>,
+        I: IntoIterator<Item = S>;
+}
+
+pub trait GHPullRequest {
+    fn head_branch_name(&self) -> &str;
+    fn base_branch_name(&self) -> &str;
+    fn pr_number(&self) -> u64;
+    fn body(&self) -> &str;
+    fn title(&self) -> &str;
+    fn closed(&self) -> bool;
+}
+
+impl GHPullRequest for octocrab::models::pulls::PullRequest {
+    fn head_branch_name(&self) -> &str {
+        self.head.ref_field.as_str()
+    }
+
+    fn base_branch_name(&self) -> &str {
+        self.base.ref_field.as_str()
+    }
+
+    fn pr_number(&self) -> u64 {
+        self.number
+    }
+
+    fn title(&self) -> &str {
+        self.title.as_ref().map_or("", |s| s.as_ref())
+    }
+
+    fn body(&self) -> &str {
+        self.body.as_ref().map_or("", |s| s.as_ref())
+    }
+
+    fn closed(&self) -> bool {
+        self.state
+            .as_ref()
+            .map_or(false, |s| s == &octocrab::models::IssueState::Closed)
+    }
 }
 
 impl GHPullRequest for PullRequest {
@@ -380,8 +325,12 @@ impl GHPullRequest for PullRequest {
         self.number
     }
 
-    fn sections(&self) -> &MessageSectionsMap {
-        &self.sections
+    fn title(&self) -> &str {
+        self.title.as_str()
+    }
+
+    fn body(&self) -> &str {
+        self.body.as_ref().map_or("", |s| s.as_str())
     }
 
     fn closed(&self) -> bool {
@@ -427,9 +376,10 @@ impl GitHubAdapter for &mut GitHub {
         Ok(ret)
     }
 
-    async fn new_pull_request<H, B>(
+    async fn new_pull_request<H, B, St, Sb>(
         &mut self,
-        message: &MessageSectionsMap,
+        title: St,
+        body: Sb,
         base_ref_name: B,
         head_ref_name: H,
         draft: bool,
@@ -437,27 +387,137 @@ impl GitHubAdapter for &mut GitHub {
     where
         H: AsRef<str>,
         B: AsRef<str>,
+        St: Into<String>,
+        Sb: Into<String>,
     {
         self.create_pull_request(
-            message,
+            title,
+            body,
             String::from(base_ref_name.as_ref()),
             String::from(head_ref_name.as_ref()),
             draft,
         )
         .await
     }
+
+    async fn add_reviewers<S, I>(
+        &mut self,
+        pr: &Self::PRAdapter,
+        reviewers: I,
+    ) -> crate::error::Result<()>
+    where
+        S: Into<String>,
+        I: IntoIterator<Item = S>,
+    {
+        let reviewers = reviewers.into_iter().map(|s| s.into());
+        let variables = request_reviews::Variables {
+            pull_request_id: pr.node_id.clone(),
+            users: Some(reviewers.collect()),
+        };
+
+        let resp: graphql_client::Response<request_reviews::ResponseData> = self
+            .crab
+            .graphql(&RequestReviews::build_query(variables))
+            .await?;
+        if let Some(errs) = resp.errors
+            && !errs.is_empty()
+        {
+            return Err(crate::error::Error::new(format!("{:?}", errs)));
+        }
+
+        Ok(())
+    }
+
+    async fn add_assignees<S, I>(
+        &mut self,
+        pr: &Self::PRAdapter,
+        assignees: I,
+    ) -> crate::error::Result<()>
+    where
+        S: Into<String>,
+        I: IntoIterator<Item = S>,
+    {
+        let mut assignee_ids = Vec::new();
+        for assignee_login in assignees.into_iter().map(|s| s.into()) {
+            let variables = user_id::Variables {
+                login: assignee_login.clone(),
+            };
+
+            let resp: graphql_client::Response<user_id::ResponseData> =
+                self.crab.graphql(&UserId::build_query(variables)).await?;
+            if let Some(errs) = resp.errors
+                && !errs.is_empty()
+            {
+                return Err(crate::error::Error::new(format!("{:?}", errs)));
+            }
+
+            let id = resp
+                .data
+                .ok_or_else(|| {
+                    crate::error::Error::new(format!(
+                        "No data on UserID request for {assignee_login}"
+                    ))
+                })?
+                .user
+                .ok_or_else(|| {
+                    crate::error::Error::new(
+                        "No user in data for UserId request for {assignee_login}",
+                    )
+                })?
+                .id;
+            assignee_ids.push(id);
+        }
+
+        let variables = add_assignees::Variables {
+            assignees: assignee_ids,
+            assignable_id: pr.node_id.clone(),
+        };
+
+        let resp: graphql_client::Response<add_assignees::ResponseData> = self
+            .crab
+            .graphql(&AddAssignees::build_query(variables))
+            .await?;
+        if let Some(errs) = resp.errors
+            && !errs.is_empty()
+        {
+            return Err(crate::error::Error::new(format!("{:?}", errs)));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 pub mod fakes {
-    use crate::message::{MessageSection, MessageSectionsMap};
-
     #[derive(Debug, Clone)]
     pub struct PullRequest {
         pub base: String,
         pub head: String,
         pub number: u64,
-        pub sections: MessageSectionsMap,
+        pub title: String,
+        pub body: String,
+        pub reviewers: Vec<String>,
+        pub assignees: Vec<String>,
+    }
+
+    impl PullRequest {
+        pub fn new<Ba, H, T, Bo>(base: Ba, head: H, number: u64, title: T, body: Bo) -> Self
+        where
+            Ba: Into<String>,
+            H: Into<String>,
+            T: Into<String>,
+            Bo: Into<String>,
+        {
+            PullRequest {
+                base: base.into(),
+                head: head.into(),
+                number,
+                title: title.into(),
+                body: body.into(),
+                reviewers: Vec::new(),
+                assignees: Vec::new(),
+            }
+        }
     }
 
     impl super::GHPullRequest for PullRequest {
@@ -473,8 +533,12 @@ pub mod fakes {
             self.number
         }
 
-        fn sections(&self) -> &MessageSectionsMap {
-            &self.sections
+        fn body(&self) -> &str {
+            self.body.as_str()
+        }
+
+        fn title(&self) -> &str {
+            self.title.as_str()
         }
 
         fn closed(&self) -> bool {
@@ -513,16 +577,19 @@ pub mod fakes {
                 })
         }
 
-        async fn new_pull_request<H, B>(
+        async fn new_pull_request<H, B, St, Sb>(
             &mut self,
-            message: &MessageSectionsMap,
+            title: St,
+            body: Sb,
             base_ref_name: B,
             head_ref_name: H,
-            _: bool,
+            _draft: bool,
         ) -> crate::error::Result<Self::PRAdapter>
         where
             H: AsRef<str>,
             B: AsRef<str>,
+            St: Into<String>,
+            Sb: Into<String>,
         {
             let max = self
                 .pull_requests
@@ -530,16 +597,47 @@ pub mod fakes {
                 .map(|(k, _)| *k)
                 .max()
                 .unwrap_or(0);
-            let pr = Self::PRAdapter {
-                number: max + 1,
-                base: String::from(base_ref_name.as_ref()),
-                head: String::from(head_ref_name.as_ref()),
-                sections: message.clone(),
-            };
+            let pr = Self::PRAdapter::new(
+                base_ref_name.as_ref(),
+                head_ref_name.as_ref(),
+                max + 1,
+                title,
+                body,
+            );
 
             self.pull_requests.insert(pr.number, pr.clone());
 
             Ok(pr)
+        }
+
+        async fn add_reviewers<S, I>(
+            &mut self,
+            pr: &Self::PRAdapter,
+            reviewers: I,
+        ) -> crate::error::Result<()>
+        where
+            S: Into<String>,
+            I: IntoIterator<Item = S>,
+        {
+            if let Some(pr) = self.pull_requests.get_mut(&pr.number) {
+                pr.reviewers.extend(reviewers.into_iter().map(|s| s.into()));
+            }
+            Ok(())
+        }
+
+        async fn add_assignees<S, I>(
+            &mut self,
+            pr: &Self::PRAdapter,
+            assignees: I,
+        ) -> crate::error::Result<()>
+        where
+            S: Into<String>,
+            I: IntoIterator<Item = S>,
+        {
+            if let Some(pr) = self.pull_requests.get_mut(&pr.number) {
+                pr.assignees.extend(assignees.into_iter().map(|s| s.into()));
+            }
+            Ok(())
         }
     }
 
@@ -569,16 +667,19 @@ pub mod fakes {
                 })
         }
 
-        async fn new_pull_request<H, B>(
+        async fn new_pull_request<H, B, St, Sb>(
             &mut self,
-            message: &MessageSectionsMap,
+            title: St,
+            body: Sb,
             base_ref_name: B,
             head_ref_name: H,
-            _: bool,
+            _draft: bool,
         ) -> crate::error::Result<Self::PRAdapter>
         where
             H: AsRef<str>,
             B: AsRef<str>,
+            St: Into<String>,
+            Sb: Into<String>,
         {
             let max = self
                 .pull_requests
@@ -586,22 +687,47 @@ pub mod fakes {
                 .map(|(k, _)| *k)
                 .max()
                 .unwrap_or(0);
-            let pr = Self::PRAdapter {
-                number: max + 1,
-                base: String::from(base_ref_name.as_ref()),
-                head: String::from(head_ref_name.as_ref()),
-                sections: message
-                    .clone()
-                    .into_iter()
-                    .filter(|(k, _)| {
-                        k != &MessageSection::LastCommit && k != &MessageSection::PullRequest
-                    })
-                    .collect(),
-            };
+            let pr = Self::PRAdapter::new(
+                base_ref_name.as_ref(),
+                head_ref_name.as_ref(),
+                max + 1,
+                title,
+                body,
+            );
 
             self.pull_requests.insert(pr.number, pr.clone());
 
             Ok(pr)
+        }
+
+        async fn add_reviewers<S, I>(
+            &mut self,
+            pr: &Self::PRAdapter,
+            reviewers: I,
+        ) -> crate::error::Result<()>
+        where
+            S: Into<String>,
+            I: IntoIterator<Item = S>,
+        {
+            if let Some(pr) = self.pull_requests.get_mut(&pr.number) {
+                pr.reviewers.extend(reviewers.into_iter().map(|s| s.into()));
+            }
+            Ok(())
+        }
+
+        async fn add_assignees<S, I>(
+            &mut self,
+            pr: &Self::PRAdapter,
+            assignees: I,
+        ) -> crate::error::Result<()>
+        where
+            S: Into<String>,
+            I: IntoIterator<Item = S>,
+        {
+            if let Some(pr) = self.pull_requests.get_mut(&pr.number) {
+                pr.assignees.extend(assignees.into_iter().map(|s| s.into()));
+            }
+            Ok(())
         }
     }
 }
