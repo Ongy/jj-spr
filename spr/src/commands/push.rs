@@ -1176,4 +1176,91 @@ pub mod tests {
             .expect("push should succeed with --force flag and ahead upstream");
         }
     }
+
+    mod tree_formatting {
+        #[test]
+        fn single() {
+            let lines = super::super::format_revision_subtree(&crate::tree::Tree::new(
+                crate::jj::Revision {
+                    id: crate::jj::ChangeId::from("change"),
+                    parent_ids: Vec::new(),
+                    pull_request_number: Some(1),
+                    title: String::from("My Title"),
+                    message: std::collections::BTreeMap::new(),
+                    bookmarks: Vec::new(),
+                },
+            ));
+            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
+
+            assert_eq!(
+                str_lines.as_slice(),
+                &["• [My Title](1)"],
+                "Lines didn't match expectation"
+            );
+        }
+
+        #[test]
+        fn list() {
+            let mut tree = crate::tree::Tree::new(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(1),
+                title: String::from("My Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            tree.add_child_value(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(2),
+                title: String::from("My Other Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            let lines = super::super::format_revision_subtree(&tree);
+            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
+
+            assert_eq!(
+                str_lines.as_slice(),
+                &["• [My Title](1)", "• [My Other Title](2)"],
+                "Lines didn't match expectation"
+            );
+        }
+
+        #[test]
+        fn tree() {
+            let mut tree = crate::tree::Tree::new(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(1),
+                title: String::from("My Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            tree.add_child_value(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(2),
+                title: String::from("My Other Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            tree.add_child_value(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(3),
+                title: String::from("My Third Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            let lines = super::super::format_revision_subtree(&tree);
+            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
+
+            assert_eq!(
+                str_lines.as_slice(),
+                &["• [My Title](1)", "│ • [My Other Title](2)", "• [My Third Title](3)"],
+                "Lines didn't match: {str_lines:?}",
+            );
+        }
+    }
 }
