@@ -117,7 +117,15 @@ where
     }
 
     for (pr, parent) in pr_chain.into_iter().rev() {
-        do_adopt(jj, config, pr.sections(), pr.head_branch_name(), parent)?;
+        let sections = MessageSectionsMap::from([
+            (MessageSection::Title, pr.title().into()),
+            (MessageSection::Summary, pr.body().into()),
+            (
+                MessageSection::PullRequest,
+                config.pull_request_url(pr.pr_number()),
+            ),
+        ]);
+        do_adopt(jj, config, &sections, pr.head_branch_name(), parent)?;
     }
 
     Ok(())
@@ -148,15 +156,13 @@ mod tests {
             crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
                     pr_nr,
-                    crate::github::fakes::PullRequest {
-                        number: pr_nr,
-                        base: String::from("main"),
-                        head: String::from("spr/test/test-branch"),
-                        sections: std::collections::BTreeMap::from([(
-                            MessageSection::PullRequest,
-                            testing::config::basic().pull_request_url(pr_nr),
-                        )]),
-                    },
+                    crate::github::fakes::PullRequest::new(
+                        "main",
+                        "spr/test/test-branch",
+                        pr_nr,
+                        "My Title",
+                        "",
+                    ),
                 )]),
             },
             &testing::config::basic(),
@@ -227,27 +233,23 @@ mod tests {
                 pull_requests: std::collections::BTreeMap::from([
                     (
                         pr_nr,
-                        crate::github::fakes::PullRequest {
-                            number: 1,
-                            base: String::from("main"),
-                            head: String::from("spr/test/test-branch"),
-                            sections: std::collections::BTreeMap::from([(
-                                MessageSection::PullRequest,
-                                testing::config::basic().pull_request_url(pr_nr),
-                            )]),
-                        },
+                        crate::github::fakes::PullRequest::new(
+                            "main",
+                            "spr/test/test-branch",
+                            pr_nr,
+                            "My Title",
+                            "",
+                        ),
                     ),
                     (
                         other_nr,
-                        crate::github::fakes::PullRequest {
-                            number: other_nr,
-                            base: String::from("spr/test/test-branch"),
-                            head: String::from("spr/test/other-branch"),
-                            sections: std::collections::BTreeMap::from([(
-                                MessageSection::PullRequest,
-                                testing::config::basic().pull_request_url(other_nr),
-                            )]),
-                        },
+                        crate::github::fakes::PullRequest::new(
+                            "spr/test/test-branch",
+                            "spr/test/other-branch",
+                            other_nr,
+                            "My Title",
+                            "",
+                        ),
                     ),
                 ]),
             },
@@ -312,27 +314,23 @@ mod tests {
             pull_requests: std::collections::BTreeMap::from([
                 (
                     pr_nr,
-                    crate::github::fakes::PullRequest {
-                        number: 1,
-                        base: String::from("main"),
-                        head: String::from("spr/test/test-branch"),
-                        sections: std::collections::BTreeMap::from([(
-                            MessageSection::PullRequest,
-                            testing::config::basic().pull_request_url(pr_nr),
-                        )]),
-                    },
+                    crate::github::fakes::PullRequest::new(
+                        "main",
+                        "spr/test/test-branch",
+                        pr_nr,
+                        "My Title",
+                        "",
+                    ),
                 ),
                 (
                     other_nr,
-                    crate::github::fakes::PullRequest {
-                        number: other_nr,
-                        base: String::from("spr/test/test-branch"),
-                        head: String::from("spr/test/other-branch"),
-                        sections: std::collections::BTreeMap::from([(
-                            MessageSection::PullRequest,
-                            testing::config::basic().pull_request_url(other_nr),
-                        )]),
-                    },
+                    crate::github::fakes::PullRequest::new(
+                        "spr/test/test-branch",
+                        "spr/test/other-branch",
+                        other_nr,
+                        "My Title",
+                        "",
+                    ),
                 ),
             ]),
         };

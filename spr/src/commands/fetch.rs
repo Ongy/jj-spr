@@ -82,8 +82,7 @@ fn do_fetch<
                 if pull_request.base_branch_name() == config.master_ref {
                     let main_revset = {
                         let main_branch = jj.git_repo.find_branch(
-                            format!("{}/{}", config.remote_name, config.master_ref)
-                                .as_str(),
+                            format!("{}/{}", config.remote_name, config.master_ref).as_str(),
                             git2::BranchType::Remote,
                         )?;
                         RevSet::from_remote_branch(&main_branch, &config.remote_name)?
@@ -114,9 +113,12 @@ fn do_fetch<
                     .insert(MessageSection::LastCommit, new_latest_commit.to_string());
             }
 
-            for (k, v) in pull_request.sections().iter() {
-                revision.message.insert(*k, v.clone());
-            }
+            revision
+                .message
+                .insert(MessageSection::Title, pull_request.title().into());
+            revision
+                .message
+                .insert(MessageSection::Summary, pull_request.body().into());
         }
 
         failure = validate_commit_message(&revision.message).is_err() || failure;
@@ -221,15 +223,13 @@ mod tests {
             crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
                     1,
-                    crate::github::fakes::PullRequest {
-                        number: 1,
-                        sections: std::collections::BTreeMap::from([
-                            (MessageSection::Summary, "New Summary".into()),
-                            (MessageSection::Title, "New Title".into()),
-                        ]),
-                        base: String::from("main"),
-                        head: String::from("spr/test/test-commit"),
-                    },
+                    crate::github::fakes::PullRequest::new(
+                        "main",
+                        "spr/test/test-commit",
+                        1,
+                        "New Title",
+                        "New Summary",
+                    ),
                 )]),
             },
             &config,
@@ -295,15 +295,13 @@ mod tests {
             crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
                     1,
-                    crate::github::fakes::PullRequest {
-                        number: 1,
-                        sections: std::collections::BTreeMap::from([
-                            (MessageSection::Summary, "New Summary".into()),
-                            (MessageSection::Title, "New Title".into()),
-                        ]),
-                        base: String::from("main"),
-                        head: String::from("spr/test/test-commit"),
-                    },
+                    crate::github::fakes::PullRequest::new(
+                        "main",
+                        "spr/test/test-commit",
+                        1,
+                        "New Title",
+                        "New Summary",
+                    ),
                 )]),
             },
             &config,
@@ -385,15 +383,13 @@ mod tests {
             crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
                     1,
-                    crate::github::fakes::PullRequest {
-                        number: 1,
-                        sections: std::collections::BTreeMap::from([
-                            (MessageSection::Summary, "New Summary".into()),
-                            (MessageSection::Title, "New Title".into()),
-                        ]),
-                        base: String::from("main"),
-                        head: String::from("spr/test/test-commit"),
-                    },
+                    crate::github::fakes::PullRequest::new(
+                        "main",
+                        "spr/test/test-commit",
+                        1,
+                        "New Title",
+                        "New Summary",
+                    ),
                 )]),
             },
             &config,
@@ -458,15 +454,13 @@ mod tests {
             crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
                     1,
-                    crate::github::fakes::PullRequest {
-                        number: 1,
-                        sections: std::collections::BTreeMap::from([
-                            (MessageSection::Summary, "New Summary".into()),
-                            (MessageSection::Title, "New Title".into()),
-                        ]),
-                        base: String::from("main"),
-                        head: String::from("spr/test/test-commit"),
-                    },
+                    crate::github::fakes::PullRequest::new(
+                        "main",
+                        "spr/test/test-commit",
+                        1,
+                        "New Title",
+                        "New Summary",
+                    ),
                 )]),
             },
             &config,
