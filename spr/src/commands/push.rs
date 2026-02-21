@@ -249,7 +249,7 @@ fn format_revision_subtree(tree: &crate::tree::Tree<crate::jj::Revision>) -> Vec
     // The node itself doesn't need indents.
     // It is indented by the parent if necessary
     lines.push(format!(
-        "• [{}](#{})",
+        "• [{}]({})",
         tree.get().title,
         tree.get().pull_request_number.unwrap_or(0)
     ));
