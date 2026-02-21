@@ -249,7 +249,7 @@ fn prepare_revision_comment(tree: &crate::tree::Tree<crate::jj::Revision>) -> Ve
     // The node itself doesn't need indents.
     // It is indented by the parent if necessary
     lines.push(format!(
-        "• [{}]({})",
+        "• [{}](#{})",
         tree.get().title,
         tree.get().pull_request_number.unwrap_or(0)
     ));
@@ -293,7 +293,7 @@ fn finalize_revision_comment(revision: &crate::jj::Revision, prepared: &Vec<Stri
 
     lines.extend_from_slice(prepared.as_slice());
     let pattern = format!(
-        "[{}]({})",
+        "[{}](#{})",
         revision.title,
         revision
             .pull_request_number
