@@ -5,29 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use octocrab::models::IssueState;
-
-use crate::{
-    error::Result,
-    message::{MessageSection, MessageSectionsMap, build_github_body},
-};
 use graphql_client::GraphQLQuery;
 
 #[derive(Clone)]
 pub struct GitHub {
     config: crate::config::Config,
     crab: octocrab::Octocrab,
-}
-
-#[derive(Debug, Clone)]
-pub struct PullRequest {
-    number: u64,
-    state: PullRequestState,
-    title: String,
-    body: Option<String>,
-    node_id: String,
-    base: String,
-    head: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,146 +47,9 @@ pub struct RequestReviews;
 )]
 pub struct AddAssignees;
 
-#[derive(serde::Serialize, Default, Debug)]
-pub struct PullRequestUpdate {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub body: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<PullRequestState>,
-}
-
-impl PullRequestUpdate {
-    pub fn is_empty(&self) -> bool {
-        self.title.is_none() && self.body.is_none() && self.base.is_none() && self.state.is_none()
-    }
-
-    pub fn update_message(&mut self, pull_request: &PullRequest, message: &MessageSectionsMap) {
-        let title = message.get(&MessageSection::Title);
-        if title.is_some() && title != Some(&pull_request.title) {
-            self.title = title.cloned();
-        }
-
-        let body = build_github_body(message);
-        if pull_request.body.as_ref() != Some(&body) {
-            self.body = Some(body);
-        }
-    }
-}
-
-impl From<octocrab::models::pulls::PullRequest> for PullRequest {
-    fn from(octo_request: octocrab::models::pulls::PullRequest) -> Self {
-        PullRequest {
-            number: octo_request.number,
-            state: octo_request
-                .state
-                .map(|s| match s {
-                    IssueState::Open => PullRequestState::Open,
-                    IssueState::Closed => PullRequestState::Closed,
-                    _ => PullRequestState::Open,
-                })
-                .unwrap_or(PullRequestState::Open),
-            title: octo_request.title.unwrap_or("Unknown Title".into()),
-            body: octo_request.body,
-            node_id: octo_request
-                .node_id
-                .expect("All PRs should have a node id")
-                .into(),
-            base: octo_request.base.ref_field,
-            head: octo_request.head.ref_field,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PullRequestState {
-    Open,
-    Closed,
-}
-
 impl GitHub {
     pub fn new(config: crate::config::Config, crab: octocrab::Octocrab) -> Self {
         Self { config, crab }
-    }
-
-    pub async fn get_pull_request_by_head<S>(self, head: S) -> Result<PullRequest>
-    where
-        S: Into<String>,
-    {
-        let head = head.into();
-        let octo_prs = self
-            .crab
-            .pulls(self.config.owner.clone(), self.config.repo.clone())
-            .list()
-            .base(head.clone())
-            .per_page(10)
-            .send()
-            .await?;
-
-        if octo_prs.total_count.unwrap_or(0) > 1 {
-            return Err(crate::error::Error::new("Found more than one candidate PR"));
-        }
-
-        if let Some(pr) = octo_prs.items.into_iter().next() {
-            Ok(PullRequest::from(pr))
-        } else {
-            Err(crate::error::Error::new(format!(
-                "Couldn't find a PR for branch {}",
-                head
-            )))
-        }
-    }
-
-    pub async fn get_pull_request(self, number: u64) -> Result<PullRequest> {
-        let octo_pr = self
-            .crab
-            .pulls(self.config.owner.clone(), self.config.repo.clone())
-            .get(number)
-            .await?;
-
-        Ok(PullRequest::from(octo_pr))
-    }
-
-    pub async fn create_pull_request<Sb, St>(
-        &self,
-        title: St,
-        body: Sb,
-        base_ref_name: String,
-        head_ref_name: String,
-        draft: bool,
-    ) -> Result<PullRequest>
-    where
-        St: Into<String>,
-        Sb: Into<String>,
-    {
-        let octo_pr = self
-            .crab
-            .pulls(self.config.owner.clone(), self.config.repo.clone())
-            .create(title.into(), head_ref_name, base_ref_name)
-            .body(body.into())
-            .draft(Some(draft))
-            .send()
-            .await?;
-
-        Ok(PullRequest::from(octo_pr))
-    }
-
-    pub async fn update_pull_request(&self, number: u64, updates: PullRequestUpdate) -> Result<()> {
-        self.crab
-            .patch::<octocrab::models::pulls::PullRequest, _, _>(
-                format!(
-                    "/repos/{}/{}/pulls/{}",
-                    self.config.owner, self.config.repo, number
-                ),
-                Some(&updates),
-            )
-            .await?;
-
-        Ok(())
     }
 }
 
@@ -312,43 +158,44 @@ impl GHPullRequest for octocrab::models::pulls::PullRequest {
     }
 }
 
-impl GHPullRequest for PullRequest {
-    fn head_branch_name(&self) -> &str {
-        self.head.as_ref()
-    }
-
-    fn base_branch_name(&self) -> &str {
-        self.base.as_ref()
-    }
-
-    fn pr_number(&self) -> u64 {
-        self.number
-    }
-
-    fn title(&self) -> &str {
-        self.title.as_str()
-    }
-
-    fn body(&self) -> &str {
-        self.body.as_ref().map_or("", |s| s.as_str())
-    }
-
-    fn closed(&self) -> bool {
-        self.state == PullRequestState::Closed
-    }
-}
-
 impl GitHubAdapter for &mut GitHub {
-    type PRAdapter = PullRequest;
+    type PRAdapter = octocrab::models::pulls::PullRequest;
     async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
-        self.clone().get_pull_request(number).await
+        let octo_pr = self
+            .crab
+            .pulls(self.config.owner.clone(), self.config.repo.clone())
+            .get(number)
+            .await?;
+
+        Ok(octo_pr)
     }
 
     async fn pull_request_by_head<S>(&mut self, head: S) -> crate::error::Result<Self::PRAdapter>
     where
         S: Into<String>,
     {
-        self.clone().get_pull_request_by_head(head).await
+        let head = head.into();
+        let octo_prs = self
+            .crab
+            .pulls(self.config.owner.clone(), self.config.repo.clone())
+            .list()
+            .base(head.clone())
+            .per_page(10)
+            .send()
+            .await?;
+
+        if octo_prs.total_count.unwrap_or(0) > 1 {
+            return Err(crate::error::Error::new("Found more than one candidate PR"));
+        }
+
+        if let Some(pr) = octo_prs.items.into_iter().next() {
+            Ok(pr)
+        } else {
+            Err(crate::error::Error::new(format!(
+                "Couldn't find a PR for branch {}",
+                head
+            )))
+        }
     }
 
     async fn pull_requests<I>(
@@ -362,7 +209,14 @@ impl GitHubAdapter for &mut GitHub {
             let gh = self.clone();
             tokio::spawn(async move {
                 match number {
-                    Some(number) => gh.get_pull_request(number).await.map(|v| Some(v)),
+                    Some(number) => {
+                        let octo_pr = gh
+                            .crab
+                            .pulls(gh.config.owner.clone(), gh.config.repo.clone())
+                            .get(number)
+                            .await;
+                        octo_pr.map(|v| Some(v))
+                    }
                     None => Ok(None),
                 }
             })
@@ -390,14 +244,16 @@ impl GitHubAdapter for &mut GitHub {
         St: Into<String>,
         Sb: Into<String>,
     {
-        self.create_pull_request(
-            title,
-            body,
-            String::from(base_ref_name.as_ref()),
-            String::from(head_ref_name.as_ref()),
-            draft,
-        )
-        .await
+        let octo_pr = self
+            .crab
+            .pulls(self.config.owner.clone(), self.config.repo.clone())
+            .create(title.into(), head_ref_name.as_ref(), base_ref_name.as_ref())
+            .body(body.into())
+            .draft(Some(draft))
+            .send()
+            .await?;
+
+        Ok(octo_pr)
     }
 
     async fn add_reviewers<S, I>(
@@ -411,7 +267,11 @@ impl GitHubAdapter for &mut GitHub {
     {
         let reviewers = reviewers.into_iter().map(|s| s.into());
         let variables = request_reviews::Variables {
-            pull_request_id: pr.node_id.clone(),
+            pull_request_id: pr
+                .node_id
+                .as_ref()
+                .expect("Every PR should have a node id")
+                .to_string(),
             users: Some(reviewers.collect()),
         };
 
@@ -470,7 +330,11 @@ impl GitHubAdapter for &mut GitHub {
 
         let variables = add_assignees::Variables {
             assignees: assignee_ids,
-            assignable_id: pr.node_id.clone(),
+            assignable_id: pr
+                .node_id
+                .as_ref()
+                .expect("Every PR should have a node id")
+                .to_string(),
         };
 
         let resp: graphql_client::Response<add_assignees::ResponseData> = self
