@@ -64,6 +64,24 @@ pub struct RequestReviews;
 )]
 pub struct AddAssignees;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/gql/schema.docs.graphql",
+    query_path = "src/gql/update_issuecomment.graphql",
+    variables_derives = "Clone, Debug",
+    response_derives = "Clone, Debug"
+)]
+pub struct UpdateIssueComment;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/gql/schema.docs.graphql",
+    query_path = "src/gql/update_issuecomment.graphql",
+    variables_derives = "Clone, Debug",
+    response_derives = "Clone, Debug"
+)]
+pub struct AddComment;
+
 #[derive(serde::Serialize, Default, Debug)]
 pub struct PullRequestUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -103,7 +121,10 @@ impl From<octocrab::models::pulls::PullRequest> for PullRequest {
                 MessageSection::PullRequest,
                 // This is quite unclean, but we never really care about the full URL.
                 // So for the time being, this will be wrong....
-                format!("https://github.com/Ongy/jj-spr/pull/{}", octo_request.number),
+                format!(
+                    "https://github.com/Ongy/jj-spr/pull/{}",
+                    octo_request.number
+                ),
             ),
         ]);
         if let Some(ref body) = octo_request.body {
@@ -310,6 +331,62 @@ impl GitHub {
 
         Ok(())
     }
+
+    pub async fn update_pr_comment<S>(&self, number: u64, content: S) -> Result<()>
+    where
+        S: Into<String>,
+    {
+        let mut comments = self
+            .crab
+            .pulls(self.config.owner.clone(), self.config.repo.clone())
+            .list_comments(Some(number))
+            .per_page(10)
+            .send()
+            .await?;
+
+        let my_id = self.crab.current().user().await?.id;
+
+        if let Some(old) = comments.take_items().into_iter().find(|c| {
+            c.pull_request_review_id.is_none() && c.user.as_ref().map_or(false, |a| a.id == my_id)
+        }) {
+            let variables = update_issue_comment::Variables {
+                comment_id: old.node_id,
+                body: content.into(),
+            };
+
+            let resp: graphql_client::Response<update_issue_comment::ResponseData> = self
+                .crab
+                .graphql(&UpdateIssueComment::build_query(variables))
+                .await?;
+            if let Some(errs) = resp.errors
+                && !errs.is_empty()
+            {
+                return Err(crate::error::Error::new(format!("{:?}", errs)));
+            }
+            return Ok(());
+        }
+
+        let octo_pr = self
+            .crab
+            .pulls(self.config.owner.clone(), self.config.repo.clone())
+            .get(number)
+            .await?;
+        let variables = add_comment::Variables {
+            pull_request_id: octo_pr.node_id.expect("PR's should really have node ids"),
+            body: content.into(),
+        };
+
+        let resp: graphql_client::Response<add_comment::ResponseData> = self
+            .crab
+            .graphql(&AddComment::build_query(variables))
+            .await?;
+        if let Some(errs) = resp.errors
+            && !errs.is_empty()
+        {
+            return Err(crate::error::Error::new(format!("{:?}", errs)));
+        }
+        Ok(())
+    }
 }
 
 pub trait GHPullRequest {
@@ -365,6 +442,14 @@ pub trait GitHubAdapter {
             Ok(ret)
         }
     }
+
+    fn update_pr_comment<S>(
+        &self,
+        number: u64,
+        content: S,
+    ) -> impl std::future::Future<Output = crate::error::Result<()>>
+    where
+        S: Into<String>;
 }
 
 impl GHPullRequest for PullRequest {
@@ -445,6 +530,13 @@ impl GitHubAdapter for &mut GitHub {
             draft,
         )
         .await
+    }
+
+    async fn update_pr_comment<S>(&self, number: u64, content: S) -> crate::error::Result<()>
+    where
+        S: Into<String>,
+    {
+        self::GitHub::update_pr_comment(&self, number, content).await
     }
 }
 
@@ -541,6 +633,13 @@ pub mod fakes {
 
             Ok(pr)
         }
+
+        async fn update_pr_comment<S>(&self, _number: u64, _content: S) -> crate::error::Result<()>
+        where
+            S: Into<String>,
+        {
+            Ok(())
+        }
     }
 
     impl super::GitHubAdapter for &mut GitHub {
@@ -602,6 +701,13 @@ pub mod fakes {
             self.pull_requests.insert(pr.number, pr.clone());
 
             Ok(pr)
+        }
+
+        async fn update_pr_comment<S>(&self, _number: u64, _content: S) -> crate::error::Result<()>
+        where
+            S: Into<String>,
+        {
+            Ok(())
         }
     }
 }

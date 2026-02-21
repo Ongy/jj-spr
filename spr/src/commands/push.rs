@@ -244,6 +244,27 @@ where
     Ok(seen)
 }
 
+fn format_revision_tree(tree: &crate::tree::Tree<crate::jj::Revision>) -> String {
+    let mut lines = Vec::new();
+
+    // For now this only works on stacks that don't branch...
+    let mut it = tree;
+    loop {
+        lines.push(format!(
+            "* [{}]({})",
+            tree.get().title,
+            tree.get().pull_request_number.unwrap_or(0)
+        ));
+        if let Some(next) = it.get_children().first() {
+            it = next;
+        } else {
+            break;
+        }
+    }
+
+    lines.join("\n")
+}
+
 pub async fn push<GH, PR>(
     jj: &mut crate::jj::Jujutsu,
     mut gh: GH,
@@ -305,8 +326,8 @@ where
         .pull_requests(revisions.iter().map(|r| r.pull_request_number))
         .await?;
 
-    let actions = do_push(config, jj, &opts, zip(revisions, pull_requests), trunk_oid).await?;
-    for mut action in actions.into_iter() {
+    let mut actions = do_push(config, jj, &opts, zip(revisions, pull_requests), trunk_oid).await?;
+    for action in actions.iter_mut().into_iter() {
         // We don't know what to do with these yet...
         if let Some(_) = action.existing_nr {
             // This will at least write the current commit message.
@@ -317,8 +338,8 @@ where
         let pr = gh
             .new_pull_request(
                 &action.revision.message,
-                action.base_branch,
-                action.head_branch,
+                action.base_branch.clone(),
+                action.head_branch.clone(),
                 false,
             )
             .await?;
@@ -337,8 +358,33 @@ where
             .revision
             .message
             .insert(MessageSection::PullRequest, pull_request_url);
+        action.revision.pull_request_number = Some(pr.pr_number());
 
         jj.update_revision_message(&action.revision)?;
+    }
+
+    let mut forest: crate::tree::Forest<crate::jj::Revision> = crate::tree::Forest::new();
+    for ba in actions {
+        let parent = ba
+            .revision
+            .parent_ids
+            .first()
+            .expect("We guaranteed we have at least one parent earlier")
+            .clone();
+
+        forest.insert_below(&|p: &crate::jj::Revision| p.id == parent, ba.revision);
+    }
+
+    for tree in forest.into_trees() {
+        let content = format_revision_tree(&tree);
+        for rev in tree.into_iter() {
+            gh.update_pr_comment(
+                rev.pull_request_number
+                    .expect("Every revision has a PR at this point"),
+                &content,
+            )
+            .await?;
+        }
     }
 
     Ok(())
@@ -860,7 +906,7 @@ pub mod tests {
             .expect("Failed to revparse HEAD");
 
         let commit_id = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        
+
         // Create a bookmark for the current commit
         jj.bookmark_create("my-custom-bookmark", Some(commit_id.as_ref()))
             .expect("Failed to create bookmark");
@@ -881,7 +927,7 @@ pub mod tests {
         let pr_branch = bare
             .find_branch("my-custom-bookmark", git2::BranchType::Local)
             .expect("Expected to find branch 'my-custom-bookmark' on bare upstream");
-            
+
         let pr_oid = pr_branch
             .get()
             .target()
