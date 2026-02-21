@@ -244,23 +244,54 @@ where
     Ok(seen)
 }
 
-fn format_revision_tree(tree: &crate::tree::Tree<crate::jj::Revision>) -> String {
+fn format_revision_subtree(tree: &crate::tree::Tree<crate::jj::Revision>) -> Vec<String> {
     let mut lines = Vec::new();
+    // The node itself doesn't need indents.
+    // It is indented by the parent if necessary
+    lines.push(format!(
+        "• [{}]({})",
+        tree.get().title,
+        tree.get().pull_request_number.unwrap_or(0)
+    ));
 
-    // For now this only works on stacks that don't branch...
-    let mut it = tree;
-    loop {
-        lines.push(format!(
-            "* [{}]({})",
-            tree.get().title,
-            tree.get().pull_request_number.unwrap_or(0)
-        ));
-        if let Some(next) = it.get_children().first() {
-            it = next;
-        } else {
-            break;
+    let children = tree.get_children();
+    match children.as_slice() {
+        [] => {}
+        [next] => {
+            lines.extend(format_revision_subtree(next));
+        }
+        // We have more than one child branch.
+        // We need to actually build an unicode-art tree
+        children => {
+            let mut child_lines = Vec::new();
+            for child in children {
+                let indent = [String::from(" ")]
+                    .into_iter()
+                    .cycle()
+                    .take(child.width() * 2 - 1)
+                    .reduce(|l, r| format!("{l}{r}"))
+                    .unwrap_or(String::from(" "));
+                let new_lines = format_revision_subtree(child);
+                let old_lines = child_lines.into_iter().map(|l| format!("│{}{}", indent, l));
+                child_lines = old_lines.collect();
+                child_lines.extend(new_lines);
+            }
+
+            lines.extend(child_lines);
         }
     }
+
+    return lines;
+}
+
+fn format_revision_tree(tree: &crate::tree::Tree<crate::jj::Revision>) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "This PR is part of a {} changes series",
+        tree.len()
+    ));
+
+    lines.extend(format_revision_subtree(tree));
 
     lines.join("\n")
 }

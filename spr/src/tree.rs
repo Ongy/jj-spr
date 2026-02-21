@@ -58,6 +58,18 @@ impl<T> Tree<T> {
             ))
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.children.iter().map(|t| t.len()).sum::<usize>() + 1
+    }
+
+    pub fn width(&self) -> usize {
+        if self.children.is_empty() {
+            1
+        } else {
+            self.children.iter().map(|t| t.width()).sum::<usize>()
+        }
+    }
 }
 
 pub struct Forest<T>(Vec<Tree<T>>);
