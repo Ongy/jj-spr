@@ -82,6 +82,15 @@ pub struct UpdateIssueComment;
 )]
 pub struct AddComment;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/gql/schema.docs.graphql",
+    query_path = "src/gql/update_issuecomment.graphql",
+    variables_derives = "Clone, Debug",
+    response_derives = "Clone, Debug"
+)]
+pub struct OldComments;
+
 #[derive(serde::Serialize, Default, Debug)]
 pub struct PullRequestUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -336,21 +345,52 @@ impl GitHub {
     where
         S: Into<String>,
     {
-        let mut comments = self
+        let variables = old_comments::Variables {
+            owner: self.config.owner.clone(),
+            name: self.config.repo.clone(),
+            number: number as i64,
+        };
+
+        let resp: graphql_client::Response<old_comments::ResponseData> = self
             .crab
-            .pulls(self.config.owner.clone(), self.config.repo.clone())
-            .list_comments(Some(number))
-            .per_page(10)
-            .send()
+            .graphql(&OldComments::build_query(variables))
             .await?;
+        if let Some(errs) = resp.errors
+            && !errs.is_empty()
+        {
+            return Err(crate::error::Error::new(format!("{:?}", errs)));
+        }
 
-        let my_id = self.crab.current().user().await?.id;
+        let comments = resp
+            .data
+            .ok_or_else(|| {
+                crate::error::Error::new(format!("No data on OldComments request for {number}"))
+            })?
+            .repository
+            .ok_or_else(|| {
+                crate::error::Error::new(format!(
+                    "No repository on OldComments request for {number}"
+                ))
+            })?
+            .pull_request
+            .ok_or_else(|| {
+                crate::error::Error::new(format!(
+                    "No pullRequest on OldComments request for {number}"
+                ))
+            })?
+            .comments
+            .nodes
+            .ok_or_else(|| {
+                crate::error::Error::new(format!("No comments on OldComments request for {number}"))
+            })?;
 
-        if let Some(old) = comments.take_items().into_iter().find(|c| {
-            c.pull_request_review_id.is_none() && c.user.as_ref().map_or(false, |a| a.id == my_id)
-        }) {
+        if let Some(old) = comments
+            .into_iter()
+            .filter_map(|c| c)
+            .find(|c| c.viewer_can_update)
+        {
             let variables = update_issue_comment::Variables {
-                comment_id: old.node_id,
+                comment_id: old.id,
                 body: content.into(),
             };
 
