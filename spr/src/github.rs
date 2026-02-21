@@ -389,9 +389,15 @@ impl GitHub {
             .filter_map(|c| c)
             .find(|c| c.viewer_can_update)
         {
+            let content = content.into();
+            if old.body == content {
+                return Ok(())
+            }
+
+
             let variables = update_issue_comment::Variables {
                 comment_id: old.id,
-                body: content.into(),
+                body: content,
             };
 
             let resp: graphql_client::Response<update_issue_comment::ResponseData> = self
