@@ -244,75 +244,6 @@ where
     Ok(seen)
 }
 
-fn prepare_revision_comment(tree: &crate::tree::Tree<crate::jj::Revision>) -> Vec<String> {
-    let mut lines = Vec::new();
-    // The node itself doesn't need indents.
-    // It is indented by the parent if necessary
-    lines.push(format!(
-        "• [{}]({})",
-        tree.get().title,
-        tree.get().pull_request_number.unwrap_or(0)
-    ));
-
-    let children = tree.get_children();
-    match children.as_slice() {
-        [] => {}
-        [next] => {
-            lines.extend(prepare_revision_comment(next));
-        }
-        // We have more than one child branch.
-        // We need to actually build an unicode-art tree
-        children => {
-            let mut child_lines = Vec::new();
-            for child in children {
-                let indent = [String::from(" ")]
-                    .into_iter()
-                    .cycle()
-                    .take(child.width() * 2 - 1)
-                    .reduce(|l, r| format!("{l}{r}"))
-                    .unwrap_or(String::from(" "));
-                let new_lines = prepare_revision_comment(child);
-                let old_lines = child_lines.into_iter().map(|l| format!("│{}{}", indent, l));
-                child_lines = old_lines.collect();
-                child_lines.extend(new_lines);
-            }
-
-            lines.extend(child_lines);
-        }
-    }
-
-    return lines;
-}
-
-fn finalize_revision_comment(revision: &crate::jj::Revision, prepared: &Vec<String>) -> String {
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "This PR is part of a {} changes series",
-        prepared.len()
-    ));
-
-    lines.extend_from_slice(prepared.as_slice());
-    let pattern = format!(
-        "[{}]({})",
-        revision.title,
-        revision
-            .pull_request_number
-            .expect("Revisions at this point need to have a PR")
-    );
-    lines = lines
-        .into_iter()
-        .map(|s| {
-            if s.contains(&pattern) {
-                s.replace(&pattern, &revision.title)
-            } else {
-                s
-            }
-        })
-        .collect();
-
-    lines.join("\n")
-}
-
 pub async fn push<GH, PR>(
     jj: &mut crate::jj::Jujutsu,
     mut gh: GH,
@@ -374,8 +305,8 @@ where
         .pull_requests(revisions.iter().map(|r| r.pull_request_number))
         .await?;
 
-    let mut actions = do_push(config, jj, &opts, zip(revisions, pull_requests), trunk_oid).await?;
-    for action in actions.iter_mut().into_iter() {
+    let actions = do_push(config, jj, &opts, zip(revisions, pull_requests), trunk_oid).await?;
+    for mut action in actions.into_iter() {
         // We don't know what to do with these yet...
         if let Some(_) = action.existing_nr {
             // This will at least write the current commit message.
@@ -394,13 +325,7 @@ where
             .get(&MessageSection::Summary)
             .map_or("", |s| s.as_str());
         let pr = gh
-            .new_pull_request(
-                title,
-                body,
-                action.base_branch.clone(),
-                action.head_branch.clone(),
-                false,
-            )
+            .new_pull_request(title, body, action.base_branch, &action.head_branch, false)
             .await?;
         if let Some(reviewers) = action.revision.message.get(&MessageSection::Reviewers) {
             gh.add_reviewers(&pr, reviewers.split(",").map(|s| s.trim()))
@@ -426,34 +351,8 @@ where
             .revision
             .message
             .insert(MessageSection::PullRequest, pull_request_url);
-        action.revision.pull_request_number = Some(pr.pr_number());
 
         jj.update_revision_message(&action.revision)?;
-    }
-
-    let mut forest: crate::tree::Forest<crate::jj::Revision> = crate::tree::Forest::new();
-    for ba in actions {
-        let parent = ba
-            .revision
-            .parent_ids
-            .first()
-            .expect("We guaranteed we have at least one parent earlier")
-            .clone();
-
-        forest.insert_below(&|p: &crate::jj::Revision| p.id == parent, ba.revision);
-    }
-
-    for tree in forest.into_trees() {
-        let prepared = prepare_revision_comment(&tree);
-        for rev in tree.into_iter() {
-            let content = finalize_revision_comment(&rev, &prepared);
-            gh.update_pr_comment(
-                rev.pull_request_number
-                    .expect("Every revision has a PR at this point"),
-                &content,
-            )
-            .await?;
-        }
     }
 
     Ok(())
@@ -1212,97 +1111,6 @@ pub mod tests {
             )
             .await
             .expect("push should succeed with --force flag and ahead upstream");
-        }
-    }
-
-    mod tree_formatting {
-        #[test]
-        fn single() {
-            let lines = super::super::prepare_revision_comment(&crate::tree::Tree::new(
-                crate::jj::Revision {
-                    id: crate::jj::ChangeId::from("change"),
-                    parent_ids: Vec::new(),
-                    pull_request_number: Some(1),
-                    title: String::from("My Title"),
-                    message: std::collections::BTreeMap::new(),
-                    bookmarks: Vec::new(),
-                },
-            ));
-            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
-
-            assert_eq!(
-                str_lines.as_slice(),
-                &["• [My Title](1)"],
-                "Lines didn't match expectation"
-            );
-        }
-
-        #[test]
-        fn list() {
-            let mut tree = crate::tree::Tree::new(crate::jj::Revision {
-                id: crate::jj::ChangeId::from("change"),
-                parent_ids: Vec::new(),
-                pull_request_number: Some(1),
-                title: String::from("My Title"),
-                message: std::collections::BTreeMap::new(),
-                bookmarks: Vec::new(),
-            });
-            tree.add_child_value(crate::jj::Revision {
-                id: crate::jj::ChangeId::from("change"),
-                parent_ids: Vec::new(),
-                pull_request_number: Some(2),
-                title: String::from("My Other Title"),
-                message: std::collections::BTreeMap::new(),
-                bookmarks: Vec::new(),
-            });
-            let lines = super::super::prepare_revision_comment(&tree);
-            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
-
-            assert_eq!(
-                str_lines.as_slice(),
-                &["• [My Title](1)", "• [My Other Title](2)"],
-                "Lines didn't match expectation"
-            );
-        }
-
-        #[test]
-        fn tree() {
-            let mut tree = crate::tree::Tree::new(crate::jj::Revision {
-                id: crate::jj::ChangeId::from("change"),
-                parent_ids: Vec::new(),
-                pull_request_number: Some(1),
-                title: String::from("My Title"),
-                message: std::collections::BTreeMap::new(),
-                bookmarks: Vec::new(),
-            });
-            tree.add_child_value(crate::jj::Revision {
-                id: crate::jj::ChangeId::from("change"),
-                parent_ids: Vec::new(),
-                pull_request_number: Some(2),
-                title: String::from("My Other Title"),
-                message: std::collections::BTreeMap::new(),
-                bookmarks: Vec::new(),
-            });
-            tree.add_child_value(crate::jj::Revision {
-                id: crate::jj::ChangeId::from("change"),
-                parent_ids: Vec::new(),
-                pull_request_number: Some(3),
-                title: String::from("My Third Title"),
-                message: std::collections::BTreeMap::new(),
-                bookmarks: Vec::new(),
-            });
-            let lines = super::super::prepare_revision_comment(&tree);
-            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
-
-            assert_eq!(
-                str_lines.as_slice(),
-                &[
-                    "• [My Title](1)",
-                    "│ • [My Other Title](2)",
-                    "• [My Third Title](3)"
-                ],
-                "Lines didn't match: {str_lines:?}",
-            );
         }
     }
 

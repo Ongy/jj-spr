@@ -13,7 +13,6 @@ pub mod jj;
 pub mod message;
 pub mod output;
 pub mod revision_utils;
-pub mod tree;
 pub mod utils;
 
 #[cfg(test)]

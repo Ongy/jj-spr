@@ -64,33 +64,6 @@ pub struct RequestReviews;
 )]
 pub struct AddAssignees;
 
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "src/gql/schema.docs.graphql",
-    query_path = "src/gql/update_issuecomment.graphql",
-    variables_derives = "Clone, Debug",
-    response_derives = "Clone, Debug"
-)]
-pub struct UpdateIssueComment;
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "src/gql/schema.docs.graphql",
-    query_path = "src/gql/update_issuecomment.graphql",
-    variables_derives = "Clone, Debug",
-    response_derives = "Clone, Debug"
-)]
-pub struct AddComment;
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "src/gql/schema.docs.graphql",
-    query_path = "src/gql/update_issuecomment.graphql",
-    variables_derives = "Clone, Debug",
-    response_derives = "Clone, Debug"
-)]
-pub struct OldComments;
-
 #[derive(serde::Serialize, Default, Debug)]
 pub struct PullRequestUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -232,98 +205,6 @@ impl GitHub {
 
         Ok(())
     }
-
-    pub async fn update_pr_comment<S>(&self, number: u64, content: S) -> Result<()>
-    where
-        S: Into<String>,
-    {
-        let variables = old_comments::Variables {
-            owner: self.config.owner.clone(),
-            name: self.config.repo.clone(),
-            number: number as i64,
-        };
-
-        let resp: graphql_client::Response<old_comments::ResponseData> = self
-            .crab
-            .graphql(&OldComments::build_query(variables))
-            .await?;
-        if let Some(errs) = resp.errors
-            && !errs.is_empty()
-        {
-            return Err(crate::error::Error::new(format!("{:?}", errs)));
-        }
-
-        let comments = resp
-            .data
-            .ok_or_else(|| {
-                crate::error::Error::new(format!("No data on OldComments request for {number}"))
-            })?
-            .repository
-            .ok_or_else(|| {
-                crate::error::Error::new(format!(
-                    "No repository on OldComments request for {number}"
-                ))
-            })?
-            .pull_request
-            .ok_or_else(|| {
-                crate::error::Error::new(format!(
-                    "No pullRequest on OldComments request for {number}"
-                ))
-            })?
-            .comments
-            .nodes
-            .ok_or_else(|| {
-                crate::error::Error::new(format!("No comments on OldComments request for {number}"))
-            })?;
-
-        if let Some(old) = comments
-            .into_iter()
-            .filter_map(|c| c)
-            .find(|c| c.viewer_can_update)
-        {
-            let content = content.into();
-            if old.body == content {
-                return Ok(());
-            }
-
-            let variables = update_issue_comment::Variables {
-                comment_id: old.id,
-                body: content,
-            };
-
-            let resp: graphql_client::Response<update_issue_comment::ResponseData> = self
-                .crab
-                .graphql(&UpdateIssueComment::build_query(variables))
-                .await?;
-            if let Some(errs) = resp.errors
-                && !errs.is_empty()
-            {
-                return Err(crate::error::Error::new(format!("{:?}", errs)));
-            }
-            return Ok(());
-        }
-
-        let octo_pr = self
-            .crab
-            .pulls(self.config.owner.clone(), self.config.repo.clone())
-            .get(number)
-            .await?;
-        let variables = add_comment::Variables {
-            pull_request_id: octo_pr.node_id.expect("PR's should really have node ids"),
-            body: content.into(),
-        };
-
-        let resp: graphql_client::Response<add_comment::ResponseData> = self
-            .crab
-            .graphql(&AddComment::build_query(variables))
-            .await?;
-        if let Some(errs) = resp.errors
-            && !errs.is_empty()
-        {
-            return Err(crate::error::Error::new(format!("{:?}", errs)));
-        }
-        Ok(())
-    }
 }
 
 pub trait GitHubAdapter {
@@ -374,14 +255,6 @@ pub trait GitHubAdapter {
             Ok(ret)
         }
     }
-
-    fn update_pr_comment<S>(
-        &self,
-        number: u64,
-        content: S,
-    ) -> impl std::future::Future<Output = crate::error::Result<()>>
-    where
-        S: Into<String>;
 
     fn add_reviewers<S, I>(
         &mut self,
@@ -525,13 +398,6 @@ impl GitHubAdapter for &mut GitHub {
             draft,
         )
         .await
-    }
-
-    async fn update_pr_comment<S>(&self, number: u64, content: S) -> crate::error::Result<()>
-    where
-        S: Into<String>,
-    {
-        self::GitHub::update_pr_comment(&self, number, content).await
     }
 
     async fn add_reviewers<S, I>(
@@ -744,13 +610,6 @@ pub mod fakes {
             Ok(pr)
         }
 
-        async fn update_pr_comment<S>(&self, _number: u64, _content: S) -> crate::error::Result<()>
-        where
-            S: Into<String>,
-        {
-            Ok(())
-        }
-
         async fn add_reviewers<S, I>(
             &mut self,
             pr: &Self::PRAdapter,
@@ -839,13 +698,6 @@ pub mod fakes {
             self.pull_requests.insert(pr.number, pr.clone());
 
             Ok(pr)
-        }
-
-        async fn update_pr_comment<S>(&self, _number: u64, _content: S) -> crate::error::Result<()>
-        where
-            S: Into<String>,
-        {
-            Ok(())
         }
 
         async fn add_reviewers<S, I>(
