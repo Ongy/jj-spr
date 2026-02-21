@@ -293,7 +293,8 @@ fn finalize_revision_comment(revision: &crate::jj::Revision, prepared: &Vec<Stri
 
     lines.extend_from_slice(prepared.as_slice());
     let pattern = format!(
-        "({})",
+        "[{}]({})",
+        revision.title,
         revision
             .pull_request_number
             .expect("Revisions at this point need to have a PR")
@@ -302,7 +303,7 @@ fn finalize_revision_comment(revision: &crate::jj::Revision, prepared: &Vec<Stri
         .into_iter()
         .map(|s| {
             if s.contains(&pattern) {
-                s.replace("•", "‣")
+                s.replace(&pattern, &revision.title)
             } else {
                 s
             }
@@ -423,7 +424,7 @@ where
     }
 
     for tree in forest.into_trees() {
-        let prepared =prepare_revision_comment(&tree);
+        let prepared = prepare_revision_comment(&tree);
         for rev in tree.into_iter() {
             let content = finalize_revision_comment(&rev, &prepared);
             gh.update_pr_comment(
