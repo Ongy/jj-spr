@@ -60,9 +60,6 @@ enum Commands {
     /// Update local commit message with content on GitHub
     Fetch(commands::fetch::FetchOptions),
 
-    /// List open Pull Requests on GitHub and their review decision
-    List,
-
     /// Create a new branch with the contents of an existing Pull Request
     Adopt(commands::adopt::AdoptOptions),
 }
@@ -123,9 +120,6 @@ pub async fn spr() -> Result<()> {
         format!("Bearer {}", github_auth_token).parse()?,
     );
 
-    let graphql_client = reqwest::Client::builder()
-        .default_headers(headers)
-        .build()?;
     let config = config::from_jj(&jj, async || {
         let user = crab.current().user().await?;
         Ok(user.login)
@@ -135,7 +129,6 @@ pub async fn spr() -> Result<()> {
 
     match cli.command {
         Commands::Fetch(opts) => commands::fetch::fetch(opts, &mut jj, &mut gh, &config).await?,
-        Commands::List => commands::list::list(graphql_client, &config).await?,
         Commands::Adopt(opts) => commands::adopt::adopt(opts, &mut jj, &mut gh, &config).await?,
         Commands::Push(opts) => commands::push::push(&mut jj, &mut gh, &config, opts).await?,
         Commands::Sync(opts) => commands::sync::sync(&mut jj, &mut gh, &config, opts).await?,
