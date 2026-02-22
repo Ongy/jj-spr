@@ -27,3 +27,9 @@ query OldComments(
     }
   }
 }
+
+mutation UpdatePRBase($pull_request_id: ID!, $branch: String!) {
+  updatePullRequest(input: {pullRequestId: $pull_request_id, baseRefName: $branch}) {
+    clientMutationId
+  }
+}
