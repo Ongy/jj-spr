@@ -244,23 +244,54 @@ where
     Ok(seen)
 }
 
-fn format_revision_tree(tree: &crate::tree::Tree<crate::jj::Revision>) -> String {
+fn format_revision_subtree(tree: &crate::tree::Tree<crate::jj::Revision>) -> Vec<String> {
     let mut lines = Vec::new();
+    // The node itself doesn't need indents.
+    // It is indented by the parent if necessary
+    lines.push(format!(
+        "• [{}]({})",
+        tree.get().title,
+        tree.get().pull_request_number.unwrap_or(0)
+    ));
 
-    // For now this only works on stacks that don't branch...
-    let mut it = tree;
-    loop {
-        lines.push(format!(
-            "* [{}]({})",
-            tree.get().title,
-            tree.get().pull_request_number.unwrap_or(0)
-        ));
-        if let Some(next) = it.get_children().first() {
-            it = next;
-        } else {
-            break;
+    let children = tree.get_children();
+    match children.as_slice() {
+        [] => {}
+        [next] => {
+            lines.extend(format_revision_subtree(next));
+        }
+        // We have more than one child branch.
+        // We need to actually build an unicode-art tree
+        children => {
+            let mut child_lines = Vec::new();
+            for child in children {
+                let indent = [String::from(" ")]
+                    .into_iter()
+                    .cycle()
+                    .take(child.width() * 2 - 1)
+                    .reduce(|l, r| format!("{l}{r}"))
+                    .unwrap_or(String::from(" "));
+                let new_lines = format_revision_subtree(child);
+                let old_lines = child_lines.into_iter().map(|l| format!("│{}{}", indent, l));
+                child_lines = old_lines.collect();
+                child_lines.extend(new_lines);
+            }
+
+            lines.extend(child_lines);
         }
     }
+
+    return lines;
+}
+
+fn format_revision_tree(tree: &crate::tree::Tree<crate::jj::Revision>) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "This PR is part of a {} changes series",
+        tree.len()
+    ));
+
+    lines.extend(format_revision_subtree(tree));
 
     lines.join("\n")
 }
@@ -1283,6 +1314,97 @@ pub mod tests {
                 &["ass1", "ass2", "ass3"],
                 "Assignees didn't get updated"
             )
+        }
+    }
+
+    mod tree_formatting {
+        #[test]
+        fn single() {
+            let lines = super::super::format_revision_subtree(&crate::tree::Tree::new(
+                crate::jj::Revision {
+                    id: crate::jj::ChangeId::from("change"),
+                    parent_ids: Vec::new(),
+                    pull_request_number: Some(1),
+                    title: String::from("My Title"),
+                    message: std::collections::BTreeMap::new(),
+                    bookmarks: Vec::new(),
+                },
+            ));
+            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
+
+            assert_eq!(
+                str_lines.as_slice(),
+                &["• [My Title](1)"],
+                "Lines didn't match expectation"
+            );
+        }
+
+        #[test]
+        fn list() {
+            let mut tree = crate::tree::Tree::new(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(1),
+                title: String::from("My Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            tree.add_child_value(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(2),
+                title: String::from("My Other Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            let lines = super::super::format_revision_subtree(&tree);
+            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
+
+            assert_eq!(
+                str_lines.as_slice(),
+                &["• [My Title](1)", "• [My Other Title](2)"],
+                "Lines didn't match expectation"
+            );
+        }
+
+        #[test]
+        fn tree() {
+            let mut tree = crate::tree::Tree::new(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(1),
+                title: String::from("My Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            tree.add_child_value(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(2),
+                title: String::from("My Other Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            tree.add_child_value(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(3),
+                title: String::from("My Third Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            let lines = super::super::format_revision_subtree(&tree);
+            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
+
+            assert_eq!(
+                str_lines.as_slice(),
+                &[
+                    "• [My Title](1)",
+                    "│ • [My Other Title](2)",
+                    "• [My Third Title](3)"
+                ],
+                "Lines didn't match: {str_lines:?}",
+            );
         }
     }
 
