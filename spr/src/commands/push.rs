@@ -441,22 +441,34 @@ where
             .revision
             .parent_ids
             .first()
-            .expect("We guaranteed we have at least one parent earlier")
-            .clone();
-
+            .map(|p| p.clone())
+            .ok_or_else(|| {
+                crate::error::Error::new(format!(
+                    "Found reivions {:?} in postprocessing that has no parents..?",
+                    ba.revision.id
+                ))
+            })?;
         forest.insert_below(&|p: &crate::jj::Revision| p.id == parent, ba.revision);
     }
 
     for tree in forest.into_trees() {
         let prepared = prepare_revision_comment(&tree, config);
         for rev in tree.into_iter() {
-            let content = finalize_revision_comment(&rev, config, &prepared);
-            gh.update_pr_comment(
-                rev.pull_request_number
-                    .expect("Every revision has a PR at this point"),
-                &content,
-            )
-            .await?;
+            match rev.pull_request_number {
+                Some(number) => {
+                    let content = finalize_revision_comment(&rev, config, &prepared);
+                    gh.update_pr_comment(number, &content).await?;
+                }
+                None => {
+                    output(
+                        "X",
+                        format!(
+                            "Change {:?} has no PR attached. This is a bug at this point",
+                            rev.id
+                        ),
+                    )?;
+                }
+            }
         }
     }
 
