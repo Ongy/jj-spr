@@ -1,6 +1,6 @@
 [package]
 name = "jj-spr"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Markus Ongyerth", "Lucio Franco"]
 description = "Super Pull Requests: Power tool for Jujutsu + GitHub workflows with amend-friendly single PRs and effortless stacked PRs"
 repository = "https://github.com/Ongy/jj-spr"
