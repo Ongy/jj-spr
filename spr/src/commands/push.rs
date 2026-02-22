@@ -244,7 +244,7 @@ where
     Ok(seen)
 }
 
-fn format_revision_subtree(tree: &crate::tree::Tree<crate::jj::Revision>) -> Vec<String> {
+fn prepare_revision_comment(tree: &crate::tree::Tree<crate::jj::Revision>) -> Vec<String> {
     let mut lines = Vec::new();
     // The node itself doesn't need indents.
     // It is indented by the parent if necessary
@@ -258,7 +258,7 @@ fn format_revision_subtree(tree: &crate::tree::Tree<crate::jj::Revision>) -> Vec
     match children.as_slice() {
         [] => {}
         [next] => {
-            lines.extend(format_revision_subtree(next));
+            lines.extend(prepare_revision_comment(next));
         }
         // We have more than one child branch.
         // We need to actually build an unicode-art tree
@@ -271,7 +271,7 @@ fn format_revision_subtree(tree: &crate::tree::Tree<crate::jj::Revision>) -> Vec
                     .take(child.width() * 2 - 1)
                     .reduce(|l, r| format!("{l}{r}"))
                     .unwrap_or(String::from(" "));
-                let new_lines = format_revision_subtree(child);
+                let new_lines = prepare_revision_comment(child);
                 let old_lines = child_lines.into_iter().map(|l| format!("│{}{}", indent, l));
                 child_lines = old_lines.collect();
                 child_lines.extend(new_lines);
@@ -284,14 +284,27 @@ fn format_revision_subtree(tree: &crate::tree::Tree<crate::jj::Revision>) -> Vec
     return lines;
 }
 
-fn format_revision_tree(tree: &crate::tree::Tree<crate::jj::Revision>) -> String {
+fn finalize_revision_comment(revision: &crate::jj::Revision, prepared: &Vec<String>) -> String {
     let mut lines = Vec::new();
     lines.push(format!(
         "This PR is part of a {} changes series",
-        tree.len()
+        prepared.len()
     ));
 
-    lines.extend(format_revision_subtree(tree));
+    lines.extend_from_slice(prepared.as_slice());
+    if let Some(number) = revision.pull_request_number {
+        let pattern = format!("[{}]({})", revision.title, number);
+        lines = lines
+            .into_iter()
+            .map(|s| {
+                if s.contains(&pattern) {
+                    s.replace(&pattern, &revision.title)
+                } else {
+                    s
+                }
+            })
+            .collect();
+    }
 
     lines.join("\n")
 }
@@ -425,10 +438,13 @@ where
     }
 
     for tree in forest.into_trees() {
-        let content = format_revision_tree(&tree);
+        let prepared = prepare_revision_comment(&tree);
         for rev in tree.into_iter() {
             match rev.pull_request_number {
-                Some(number) => gh.update_pr_comment(number, &content).await?,
+                Some(number) => {
+                    let content = finalize_revision_comment(&rev, &prepared);
+                    gh.update_pr_comment(number, &content).await?;
+                }
                 None => {
                     output(
                         "X",
@@ -1320,7 +1336,7 @@ pub mod tests {
     mod tree_formatting {
         #[test]
         fn single() {
-            let lines = super::super::format_revision_subtree(&crate::tree::Tree::new(
+            let lines = super::super::prepare_revision_comment(&crate::tree::Tree::new(
                 crate::jj::Revision {
                     id: crate::jj::ChangeId::from("change"),
                     parent_ids: Vec::new(),
@@ -1357,7 +1373,7 @@ pub mod tests {
                 message: std::collections::BTreeMap::new(),
                 bookmarks: Vec::new(),
             });
-            let lines = super::super::format_revision_subtree(&tree);
+            let lines = super::super::prepare_revision_comment(&tree);
             let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
 
             assert_eq!(
@@ -1393,7 +1409,7 @@ pub mod tests {
                 message: std::collections::BTreeMap::new(),
                 bookmarks: Vec::new(),
             });
-            let lines = super::super::format_revision_subtree(&tree);
+            let lines = super::super::prepare_revision_comment(&tree);
             let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
 
             assert_eq!(
