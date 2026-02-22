@@ -49,13 +49,7 @@ See the [Configuration](../reference/configuration.md) reference page for full d
 
 After running `jj spr init`, your settings are stored and you're ready to go. If you need to change settings later:
 
-**Easiest method - Rerun init:**
-```shell
-jj spr init
-```
-The defaults will be your current settings, so you can easily update what you need.
-
-**Alternative - Use jj config:**
+**Use jj config:**
 ```shell
 # View current settings
 jj config list --all | grep spr

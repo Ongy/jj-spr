@@ -47,13 +47,8 @@ If you want to update the title or description:
    ```
 
 2. **Update locally and push**:
-   ```shell
-   # Edit the description
-   jj describe
    
-   # Push the update to the PR
-   jj spr push
-   ```
+   This is currently not supported.
 
 ## Fields Added by jj spr
 
@@ -65,27 +60,10 @@ At various stages, `jj spr` will add metadata to your change description:
    ```
    This line tells `jj spr` that a PR exists for this change.
 
-## Example Lifecycle
-
-### Initial description:
-```
-Add user authentication
-
-Implements JWT-based authentication for the API.
-
-Reviewers: alice, bob
-```
-
-### After `jj spr push`:
-```
-Add user authentication
-
-Implements JWT-based authentication for the API.
-
-Reviewers: alice, bob
-
-Pull Request: https://github.com/example/api/pull/456
-```
+   ```
+   Last Commit: XXX
+   ```
+   This line tells `jj spr` which commit it last saw upstream. This prevents conflicts when changes are done in other ways (e.g. the UI).
 
 ## Jujutsu-Specific Tips
 

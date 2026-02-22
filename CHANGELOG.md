@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-02-22
+
+- Base child PRs on parent PR branches in Github allowing auto-rebase
+- Remove land & close & list.
+- Add commenting feature that makes PR chains obvious
+- Rename `diff` to `push`
+- Rename `amend` to `fetch`
+- Rename `patch` to `adopt`
+- Optimize features for dependent stack style development
+
 ## [0.1.0] - 2025-11-15
 
 ### Added
@@ -26,6 +36,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebranded from "jj-spr (Jujutsu Stacked Pull Requests)" to "Super Pull Requests"
 - Version reset to 0.1.0 for official release
 - Updated project metadata and repository information
-
-[unreleased]: https://github.com/LucioFranco/jj-spr/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/LucioFranco/jj-spr/releases/tag/v0.1.0

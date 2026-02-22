@@ -13,7 +13,7 @@ jj-spr is written in Rust. You need a Rust toolchain to build from source. See [
 **Using cargo install (easiest):**
 
 ```shell
-git clone https://github.com/LucioFranco/jj-spr.git
+git clone https://github.com/Ongy/jj-spr.git
 cd jj-spr
 cargo install --path spr
 ```

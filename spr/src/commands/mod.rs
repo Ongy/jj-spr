@@ -7,7 +7,6 @@
 
 pub mod fetch;
 pub mod init;
-pub mod list;
 pub mod adopt;
 pub mod push;
 pub mod sync;

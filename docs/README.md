@@ -12,6 +12,7 @@ Before using jj-spr, you should:
 
 - **Know Jujutsu basics**: Understand core concepts like changes, change IDs, and working copy (`@`). If you're new to Jujutsu, read the [Jujutsu Tutorial](https://github.com/jj-vcs/jj/blob/main/docs/tutorial.md) first.
 - **Understand the stacked-diff concept** (helpful but not required): Familiarity with review-per-commit workflows (like Phabricator or the original `spr` tool) helps, but you can learn as you go.
+- **Understand Github setacked Pull Requests** i.e. how github handles pull requests into branches that get closed due to another branch being deleted after PR using it as HEAD was merged.
 
 If you're coming from Git, the key difference is that Jujutsu uses "changes" with stable IDs instead of commits with hashes. Each change maintains its identity even when you amend or rebase it.
 
@@ -36,7 +37,7 @@ Here's a complete example to get you started quickly:
 
 ```bash
 # 1. Install jj-spr (after installing Rust from https://rustup.rs)
-git clone https://github.com/LucioFranco/jj-spr.git
+git clone https://github.com/Ongy/jj-spr.git
 cd jj-spr
 cargo install --path spr
 
@@ -59,9 +60,7 @@ jj spr push
 # ... edit your files ...
 jj spr push  # Updates the PR(s) in the stack
 
-# 7. Land on GitHub UI when approved
-
-# 8. Sync your local stack
+# 7. Sync your local stack
 jj spr sync
 ```
 
