@@ -1,0 +1,29 @@
+mutation UpdateIssueComment($comment_id: ID!, $body: String!) {
+  updateIssueComment(input: {id: $comment_id, body: $body}) {
+    clientMutationId
+  }
+}
+
+mutation AddComment($pull_request_id: ID!, $body: String!) {
+  addComment(input: {subjectId: $pull_request_id, body: $body}) {
+    clientMutationId
+  }
+}
+
+query OldComments(
+  $name: String!
+  $owner: String!
+  $number: Int!
+) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      comments(first: 100) {
+        nodes {
+          body
+          id
+          viewerCanUpdate
+        }
+      }
+    }
+  }
+}

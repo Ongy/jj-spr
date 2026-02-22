@@ -244,6 +244,27 @@ where
     Ok(seen)
 }
 
+fn format_revision_tree(tree: &crate::tree::Tree<crate::jj::Revision>) -> String {
+    let mut lines = Vec::new();
+
+    // For now this only works on stacks that don't branch...
+    let mut it = tree;
+    loop {
+        lines.push(format!(
+            "* [{}]({})",
+            tree.get().title,
+            tree.get().pull_request_number.unwrap_or(0)
+        ));
+        if let Some(next) = it.get_children().first() {
+            it = next;
+        } else {
+            break;
+        }
+    }
+
+    lines.join("\n")
+}
+
 pub async fn push<GH, PR>(
     jj: &mut crate::jj::Jujutsu,
     mut gh: GH,
@@ -305,8 +326,8 @@ where
         .pull_requests(revisions.iter().map(|r| r.pull_request_number))
         .await?;
 
-    let actions = do_push(config, jj, &opts, zip(revisions, pull_requests), trunk_oid).await?;
-    for mut action in actions.into_iter() {
+    let mut actions = do_push(config, jj, &opts, zip(revisions, pull_requests), trunk_oid).await?;
+    for action in actions.iter_mut().into_iter() {
         // We don't know what to do with these yet...
         if let Some(_) = action.existing_nr {
             // This will at least write the current commit message.
@@ -325,7 +346,7 @@ where
             .get(&MessageSection::Summary)
             .map_or("", |s| s.as_str());
         let pr = gh
-            .new_pull_request(title, body, action.base_branch, &action.head_branch, false)
+            .new_pull_request(title, body, &action.base_branch, &action.head_branch, false)
             .await?;
         if let Some(reviewers) = action.revision.message.get(&MessageSection::Reviewers) {
             gh.add_reviewers(&pr, reviewers.split(",").map(|s| s.trim()))
@@ -351,8 +372,43 @@ where
             .revision
             .message
             .insert(MessageSection::PullRequest, pull_request_url);
+        action.revision.pull_request_number = Some(pr.pr_number());
 
         jj.update_revision_message(&action.revision)?;
+    }
+
+    let mut forest: crate::tree::Forest<crate::jj::Revision> = crate::tree::Forest::new();
+    for ba in actions {
+        let parent = ba
+            .revision
+            .parent_ids
+            .first()
+            .map(|p| p.clone())
+            .ok_or_else(|| {
+                crate::error::Error::new(format!(
+                    "Found reivions {:?} in postprocessing that has no parents..?",
+                    ba.revision.id
+                ))
+            })?;
+        forest.insert_below(&|p: &crate::jj::Revision| p.id == parent, ba.revision);
+    }
+
+    for tree in forest.into_trees() {
+        let content = format_revision_tree(&tree);
+        for rev in tree.into_iter() {
+            match rev.pull_request_number {
+                Some(number) => gh.update_pr_comment(number, &content).await?,
+                None => {
+                    output(
+                        "X",
+                        format!(
+                            "Change {:?} has no PR attached. This is a bug at this point",
+                            rev.id
+                        ),
+                    )?;
+                }
+            }
+        }
     }
 
     Ok(())
@@ -1227,6 +1283,176 @@ pub mod tests {
                 &["ass1", "ass2", "ass3"],
                 "Assignees didn't get updated"
             )
+        }
+    }
+
+    mod overview_comments {
+        use crate::testing;
+
+        #[tokio::test]
+        async fn creates_comment() {
+            let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
+            let trunk_oid = jj
+                .git_repo
+                .refname_to_id("HEAD")
+                .expect("Failed to revparse HEAD");
+
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            // Validate the initial push looks good
+            let pr_branch = bare
+                .find_branch("spr/test/test-commit", git2::BranchType::Local)
+                .expect("Expected to find branch on bare upstream");
+            let pr_oid = pr_branch
+                .get()
+                .target()
+                .expect("Failed to get oid from pr branch");
+            assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
+            assert!(
+                bare.merge_base(pr_oid, trunk_oid)
+                    .expect("Failed to get merge oid")
+                    == trunk_oid,
+                "PR branch was not based on trunk"
+            );
+            let comments = gh
+                .pull_requests
+                .get(&1)
+                .expect("Push must have created PR")
+                .comments
+                .clone();
+            assert!(!comments.is_empty(), "Didn't post a PR comment",)
+        }
+
+        #[tokio::test]
+        async fn updates_existing_comment() {
+            let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
+            let trunk_oid = jj
+                .git_repo
+                .refname_to_id("HEAD")
+                .expect("Failed to revparse HEAD");
+
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            // Validate the initial push looks good
+            let pr_branch = bare
+                .find_branch("spr/test/test-commit", git2::BranchType::Local)
+                .expect("Expected to find branch on bare upstream");
+            let pr_oid = pr_branch
+                .get()
+                .target()
+                .expect("Failed to get oid from pr branch");
+            assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
+            assert!(
+                bare.merge_base(pr_oid, trunk_oid)
+                    .expect("Failed to get merge oid")
+                    == trunk_oid,
+                "PR branch was not based on trunk"
+            );
+            let comments = gh
+                .pull_requests
+                .get(&1)
+                .expect("Push must have created PR")
+                .comments
+                .clone();
+            assert!(comments.len() == 1, "Commenting logic double posted",)
+        }
+
+        #[tokio::test]
+        async fn does_not_update_unrelated() {
+            let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
+            let trunk_oid = jj
+                .git_repo
+                .refname_to_id("HEAD")
+                .expect("Failed to revparse HEAD");
+
+            let _ = super::create_jujutsu_commit(
+                &mut jj,
+                "Test commit\n\nPull Request: https://github.com/Ongy/jj-spr/pull/1",
+                "file 1",
+            );
+
+            let mut pr = crate::github::fakes::PullRequest::new(
+                "main",
+                "spr/test/test-commit",
+                1,
+                "Test commit",
+                "",
+            );
+            pr.comments.push(crate::github::fakes::PullRequestComment {
+                id: String::from("test-comment"),
+                editable: true,
+                content: String::from("Some other content"),
+            });
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::from([(1, pr)]),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            // Validate the initial push looks good
+            let pr_branch = bare
+                .find_branch("spr/test/test-commit", git2::BranchType::Local)
+                .expect("Expected to find branch on bare upstream");
+            let pr_oid = pr_branch
+                .get()
+                .target()
+                .expect("Failed to get oid from pr branch");
+            assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
+            assert!(
+                bare.merge_base(pr_oid, trunk_oid)
+                    .expect("Failed to get merge oid")
+                    == trunk_oid,
+                "PR branch was not based on trunk"
+            );
+            let comments = gh
+                .pull_requests
+                .get(&1)
+                .expect("Push must have created PR")
+                .comments
+                .clone();
+            assert!(
+                comments.len() == 2,
+                "Updated unrelated comment\nHad {} comment(s)",
+                comments.len()
+            );
         }
     }
 }
