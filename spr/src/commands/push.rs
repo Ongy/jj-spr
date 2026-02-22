@@ -414,21 +414,31 @@ where
             .revision
             .parent_ids
             .first()
-            .expect("We guaranteed we have at least one parent earlier")
-            .clone();
-
+            .map(|p| p.clone())
+            .ok_or_else(|| {
+                crate::error::Error::new(format!(
+                    "Found reivions {:?} in postprocessing that has no parents..?",
+                    ba.revision.id
+                ))
+            })?;
         forest.insert_below(&|p: &crate::jj::Revision| p.id == parent, ba.revision);
     }
 
     for tree in forest.into_trees() {
         let content = format_revision_tree(&tree);
         for rev in tree.into_iter() {
-            gh.update_pr_comment(
-                rev.pull_request_number
-                    .expect("Every revision has a PR at this point"),
-                &content,
-            )
-            .await?;
+            match rev.pull_request_number {
+                Some(number) => gh.update_pr_comment(number, &content).await?,
+                None => {
+                    output(
+                        "X",
+                        format!(
+                            "Change {:?} has no PR attached. This is a bug at this point",
+                            rev.id
+                        ),
+                    )?;
+                }
+            }
         }
     }
 
@@ -1306,211 +1316,6 @@ pub mod tests {
             )
         }
     }
-<<<<<<< Conflict 1 of 1
-%%%%%%% Changes from base #1 to side #1
- 
-     mod tree_formatting {
-         #[test]
-         fn single() {
-             let lines = super::super::prepare_revision_comment(&crate::tree::Tree::new(
-                 crate::jj::Revision {
-                     id: crate::jj::ChangeId::from("change"),
-                     parent_ids: Vec::new(),
-                     pull_request_number: Some(1),
-                     title: String::from("My Title"),
-                     message: std::collections::BTreeMap::new(),
-                     bookmarks: Vec::new(),
-                 },
-             ));
-             let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
- 
-             assert_eq!(
-                 str_lines.as_slice(),
-                 &["• [My Title](1)"],
-                 "Lines didn't match expectation"
-             );
-         }
- 
-         #[test]
-         fn list() {
-             let mut tree = crate::tree::Tree::new(crate::jj::Revision {
-                 id: crate::jj::ChangeId::from("change"),
-                 parent_ids: Vec::new(),
-                 pull_request_number: Some(1),
-                 title: String::from("My Title"),
-                 message: std::collections::BTreeMap::new(),
-                 bookmarks: Vec::new(),
-             });
-             tree.add_child_value(crate::jj::Revision {
-                 id: crate::jj::ChangeId::from("change"),
-                 parent_ids: Vec::new(),
-                 pull_request_number: Some(2),
-                 title: String::from("My Other Title"),
-                 message: std::collections::BTreeMap::new(),
-                 bookmarks: Vec::new(),
-             });
-             let lines = super::super::prepare_revision_comment(&tree);
-             let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
- 
-             assert_eq!(
-                 str_lines.as_slice(),
-                 &["• [My Title](1)", "• [My Other Title](2)"],
-                 "Lines didn't match expectation"
-             );
-         }
- 
-         #[test]
-         fn tree() {
-             let mut tree = crate::tree::Tree::new(crate::jj::Revision {
-                 id: crate::jj::ChangeId::from("change"),
-                 parent_ids: Vec::new(),
-                 pull_request_number: Some(1),
-                 title: String::from("My Title"),
-                 message: std::collections::BTreeMap::new(),
-                 bookmarks: Vec::new(),
-             });
-             tree.add_child_value(crate::jj::Revision {
-                 id: crate::jj::ChangeId::from("change"),
-                 parent_ids: Vec::new(),
-                 pull_request_number: Some(2),
-                 title: String::from("My Other Title"),
-                 message: std::collections::BTreeMap::new(),
-                 bookmarks: Vec::new(),
-             });
-             tree.add_child_value(crate::jj::Revision {
-                 id: crate::jj::ChangeId::from("change"),
-                 parent_ids: Vec::new(),
-                 pull_request_number: Some(3),
-                 title: String::from("My Third Title"),
-                 message: std::collections::BTreeMap::new(),
-                 bookmarks: Vec::new(),
-             });
-             let lines = super::super::prepare_revision_comment(&tree);
-             let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
- 
-             assert_eq!(
-                 str_lines.as_slice(),
-                 &[
-                     "• [My Title](1)",
-                     "│ • [My Other Title](2)",
-                     "• [My Third Title](3)"
-                 ],
-                 "Lines didn't match: {str_lines:?}",
-             );
-         }
-     }
- 
-     mod overview_comments {
-         use crate::testing;
- 
-         #[tokio::test]
-         async fn creates_comment() {
-             let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
-             let trunk_oid = jj
-                 .git_repo
-                 .refname_to_id("HEAD")
-                 .expect("Failed to revparse HEAD");
- 
-             let _ = super::create_jujutsu_commit(
-                 &mut jj,
-                 "Test commit\n\nAssignees: ass1,ass2, ass3",
-                 "file 1",
-             );
- 
-             let mut gh = crate::github::fakes::GitHub {
-                 pull_requests: std::collections::BTreeMap::new(),
-             };
-             super::super::push(
-                 &mut jj,
-                 &mut gh,
-                 &testing::config::basic(),
-                 super::super::PushOptions::default().with_message(Some("message")),
-             )
-             .await
-             .expect("stacked shouldn't fail");
- 
-             // Validate the initial push looks good
-             let pr_branch = bare
-                 .find_branch("spr/test/test-commit", git2::BranchType::Local)
-                 .expect("Expected to find branch on bare upstream");
-             let pr_oid = pr_branch
-                 .get()
-                 .target()
-                 .expect("Failed to get oid from pr branch");
-             assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
-             assert!(
-                 bare.merge_base(pr_oid, trunk_oid)
-                     .expect("Failed to get merge oid")
-                     == trunk_oid,
-                 "PR branch was not based on trunk"
-             );
-             let comments = gh
-                 .pull_requests
-                 .get(&1)
-                 .expect("Push must have created PR")
-                 .comments
-                 .clone();
-             assert!(!comments.is_empty(), "Didn't post a PR comment",)
-         }
- 
-         #[tokio::test]
-         async fn updates_existing_comment() {
-             let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
-             let trunk_oid = jj
-                 .git_repo
-                 .refname_to_id("HEAD")
-                 .expect("Failed to revparse HEAD");
- 
-             let _ = super::create_jujutsu_commit(
-                 &mut jj,
-                 "Test commit\n\nAssignees: ass1,ass2, ass3",
-                 "file 1",
-             );
- 
-             let mut gh = crate::github::fakes::GitHub {
-                 pull_requests: std::collections::BTreeMap::new(),
-             };
-             super::super::push(
-                 &mut jj,
-                 &mut gh,
-                 &testing::config::basic(),
-                 super::super::PushOptions::default().with_message(Some("message")),
-             )
-             .await
-             .expect("stacked shouldn't fail");
-             super::super::push(
-                 &mut jj,
-                 &mut gh,
-                 &testing::config::basic(),
-                 super::super::PushOptions::default().with_message(Some("message")),
-             )
-             .await
-             .expect("stacked shouldn't fail");
- 
-             // Validate the initial push looks good
-             let pr_branch = bare
-                 .find_branch("spr/test/test-commit", git2::BranchType::Local)
-                 .expect("Expected to find branch on bare upstream");
-             let pr_oid = pr_branch
-                 .get()
-                 .target()
-                 .expect("Failed to get oid from pr branch");
-             assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
-             assert!(
-                 bare.merge_base(pr_oid, trunk_oid)
-                     .expect("Failed to get merge oid")
-                     == trunk_oid,
-                 "PR branch was not based on trunk"
-             );
-             let comments = gh
-                 .pull_requests
-                 .get(&1)
-                 .expect("Push must have created PR")
-                 .comments
-                 .clone();
-             assert!(comments.len() == 1, "Commenting logic double posted",)
-         }
-     }
 
     mod tree_formatting {
         #[test]
@@ -1593,7 +1398,11 @@ pub mod tests {
 
             assert_eq!(
                 str_lines.as_slice(),
-                &["• [My Title](1)", "│ • [My Other Title](2)", "• [My Third Title](3)"],
+                &[
+                    "• [My Title](1)",
+                    "│ • [My Other Title](2)",
+                    "• [My Third Title](3)"
+                ],
                 "Lines didn't match: {str_lines:?}",
             );
         }
