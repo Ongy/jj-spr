@@ -204,6 +204,14 @@ pub trait GitHubAdapter {
             return self.post_comment(number, content).await;
         }
     }
+
+    fn rebase_pr<S>(
+        &mut self,
+        number: u64,
+        new_base: S,
+    ) -> impl std::future::Future<Output = crate::error::Result<()>>
+    where
+        S: Into<String>;
 }
 
 pub trait GHPullRequest {
@@ -557,6 +565,13 @@ impl GitHubAdapter for &mut GitHub {
 
         Ok(comments)
     }
+
+    async fn rebase_pr<S>(&mut self, _number: u64, _new_base: S) -> crate::error::Result<()>
+    where
+        S: Into<String>,
+    {
+        todo!()
+    }
 }
 
 #[cfg(test)]
@@ -785,6 +800,17 @@ pub mod fakes {
 
             Err(crate::error::Error::new("Couldn't find the comment"))
         }
+
+        async fn rebase_pr<S>(&mut self, number: u64, new_base: S) -> crate::error::Result<()>
+        where
+            S: Into<String>,
+        {
+            self.pull_requests
+                .get_mut(&number)
+                .ok_or_else(|| crate::error::Error::new("no such pr :("))?
+                .base = new_base.into();
+            Ok(())
+        }
     }
 
     impl super::GitHubAdapter for &mut GitHub {
@@ -925,6 +951,17 @@ pub mod fakes {
             }
 
             Err(crate::error::Error::new("Couldn't find the comment"))
+        }
+
+        async fn rebase_pr<S>(&mut self, number: u64, new_base: S) -> crate::error::Result<()>
+        where
+            S: Into<String>,
+        {
+            self.pull_requests
+                .get_mut(&number)
+                .ok_or_else(|| crate::error::Error::new("no such pr :("))?
+                .base = new_base.into();
+            Ok(())
         }
     }
 }
