@@ -294,7 +294,11 @@ fn prepare_revision_comment(
     return lines;
 }
 
-fn finalize_revision_comment(revision: &crate::jj::Revision, prepared: &Vec<String>) -> String {
+fn finalize_revision_comment(
+    revision: &crate::jj::Revision,
+    config: &crate::config::Config,
+    prepared: &Vec<String>,
+) -> String {
     let mut lines = Vec::new();
     lines.push(format!(
         "This PR is part of a {} changes series",
@@ -302,23 +306,19 @@ fn finalize_revision_comment(revision: &crate::jj::Revision, prepared: &Vec<Stri
     ));
 
     lines.extend_from_slice(prepared.as_slice());
-    let pattern = format!(
-        "[{}]({})",
-        revision.title,
-        revision
-            .pull_request_number
-            .expect("Revisions at this point need to have a PR")
-    );
-    lines = lines
-        .into_iter()
-        .map(|s| {
-            if s.contains(&pattern) {
-                s.replace(&pattern, &revision.title)
-            } else {
-                s
-            }
-        })
-        .collect();
+    if let Some(number) = revision.pull_request_number {
+        let pattern = format!("[{}]({})", revision.title, config.pull_request_url(number));
+        lines = lines
+            .into_iter()
+            .map(|s| {
+                if s.contains(&pattern) {
+                    s.replace(&pattern, &revision.title)
+                } else {
+                    s
+                }
+            })
+            .collect();
+    }
 
     lines.join("\n")
 }
@@ -450,7 +450,7 @@ where
     for tree in forest.into_trees() {
         let prepared = prepare_revision_comment(&tree, config);
         for rev in tree.into_iter() {
-            let content = finalize_revision_comment(&rev, &prepared);
+            let content = finalize_revision_comment(&rev, config, &prepared);
             gh.update_pr_comment(
                 rev.pull_request_number
                     .expect("Every revision has a PR at this point"),
