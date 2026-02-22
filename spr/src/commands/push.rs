@@ -48,14 +48,16 @@ impl PushOptions {
 }
 
 async fn do_push_single<H: AsRef<str>>(
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
     opts: &PushOptions,
     revision: &mut crate::jj::Revision,
-    base_ref: String,
+    base_ref: &crate::jj::RevSet,
     head_branch: H,
 ) -> Result<()> {
-    let base_oid = jj.git_repo.revparse_single(base_ref.as_str())?.id();
+    let base_oid = jj
+        .resolve_revision_to_commit_id(base_ref.as_ref())
+        .context(String::from("Resolve base_ref to OID"))?;
     let head_oid = jj
         .git_repo
         .revparse_single(
@@ -153,6 +155,7 @@ async fn do_push_single<H: AsRef<str>>(
     run_command(&mut cmd)
         .await
         .reword("git push failed".to_string())?;
+    jj.update()?;
 
     if let Some(pr) = revision.pull_request_number {
         if parents.len() == 1 {
@@ -174,10 +177,10 @@ struct BranchAction {
 
 async fn do_push<I, PR>(
     config: &crate::config::Config,
-    jj: &crate::jj::Jujutsu,
+    jj: &mut crate::jj::Jujutsu,
     opts: &PushOptions,
     revisions: I,
-    trunk_oid: Oid,
+    trunk_head: &crate::jj::RevSet,
 ) -> Result<Vec<BranchAction>>
 where
     PR: crate::github::GHPullRequest,
@@ -199,45 +202,40 @@ where
                 .unwrap_or("");
             config.get_new_branch_name(&jj.get_all_ref_names()?, title)
         };
-        let base_ref = if let Some(ref pr) = maybe_pr {
-            if pr.base_branch_name() == config.master_ref {
-                Some(trunk_oid.to_string())
-            } else {
-                Some(format!("{}/{}", config.remote_name, pr.base_branch_name()))
-            }
+        let base_branch = if let Some(ref pr) = maybe_pr {
+            Some(pr.base_branch_name())
         } else if let Some(ba) = seen
             .iter()
             .find(|ba| ba.revision.id == revision.parent_ids[0])
         {
-            // Ok, there is no PR. We'll have to guess a good parent.
-            Some(format!("{}/{}", config.remote_name, ba.head_branch))
+            Some(ba.head_branch.as_str())
         } else {
             None
         };
 
-        do_push_single(
-            jj,
-            config,
-            opts,
-            &mut revision,
-            base_ref.clone().unwrap_or(trunk_oid.clone().to_string()),
-            &head_ref,
-        )
-        .await
-        .map_err(|mut err| {
-            err.push("do_stacked".into());
-            err
-        })?;
+        let base_ref = if let Some(base_branch) = base_branch.as_ref()
+            && *base_branch != config.master_ref
+        {
+            let branch = jj.git_repo.find_branch(
+                format!("{}/{}", config.remote_name, base_branch).as_str(),
+                git2::BranchType::Remote,
+            )?;
+            RevSet::from_remote_branch(&branch, &config.remote_name)?
+        } else {
+            trunk_head.fork_point(&crate::jj::RevSet::from(&revision.id))
+        };
+
+        do_push_single(jj, config, opts, &mut revision, &base_ref, &head_ref)
+            .await
+            .map_err(|mut err| {
+                err.push("do_stacked".into());
+                err
+            })?;
 
         seen.push(BranchAction {
             revision,
             head_branch: head_ref,
-            base_branch: base_ref
-                .and_then(|r| {
-                    r.strip_prefix(format!("{}/", config.remote_name).as_str())
-                        .map(|s| s.into())
-                })
-                .unwrap_or(config.master_ref.clone()),
+            base_branch: base_branch.unwrap_or(config.master_ref.as_ref()).into(),
             existing_nr: maybe_pr.map(|pr| pr.pr_number()),
         });
     }
@@ -373,18 +371,23 @@ where
 
     // At this point it's guaranteed that our commits are single parent and the chain goes up to trunk()
     // We need the trunk's commit's OID. The first pull request (made against upstream trunk) needs it to start the chain.
-    let trunk_oid = if let Some(first_revision) = revisions.first() {
-        jj.resolve_revision_to_commit_id(first_revision.parent_ids[0].as_ref())
-    } else {
+    if revisions.is_empty() {
         output("👋", "No commits found - nothing to do. Good bye!")?;
         return Ok(());
-    }?;
+    };
 
     let pull_requests = gh
         .pull_requests(revisions.iter().map(|r| r.pull_request_number))
         .await?;
 
-    let mut actions = do_push(config, jj, &opts, zip(revisions, pull_requests), trunk_oid).await?;
+    let trunk = {
+        let branch = jj.git_repo.find_branch(
+            format!("{}/{}", config.remote_name, config.master_ref).as_ref(),
+            git2::BranchType::Remote,
+        )?;
+        crate::jj::RevSet::from_remote_branch(&branch, &config.remote_name)?
+    };
+    let mut actions = do_push(config, jj, &opts, zip(revisions, pull_requests), &trunk).await?;
     for action in actions.iter_mut().into_iter() {
         // We don't know what to do with these yet...
         if let Some(_) = action.existing_nr {
@@ -1020,72 +1023,205 @@ pub mod tests {
         assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
     }
 
-    #[tokio::test]
-    async fn independent_heads() {
-        let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
-        let base_change = jj
-            .revset_to_change_id(&RevSet::current().parent())
-            .expect("Should be able to find the base commit");
+    mod independent_heads {
+        use crate::testing;
 
-        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-        let left_id = create_jujutsu_commit(&mut jj, "Other commit", "file 2");
-        jj.new_revision(
-            Some(RevSet::from(&base_change)),
-            None as Option<&str>,
-            false,
-        )
-        .expect("Couldn't create new revision on base");
-        let right_id = create_jujutsu_commit(&mut jj, "More commit", "file 3");
+        #[tokio::test]
+        async fn same_base() {
+            let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+            let base_change = jj
+                .revset_to_change_id(&crate::jj::RevSet::current().parent())
+                .expect("Should be able to find the base commit");
 
-        let mut gh = crate::github::fakes::GitHub {
-            pull_requests: std::collections::BTreeMap::new(),
-        };
-        super::push(
-            &mut jj,
-            &mut gh,
-            &testing::config::basic(),
-            super::PushOptions::default()
-                .with_message(Some("message"))
-                .with_revset(Some(
-                    RevSet::from(&left_id).or(&RevSet::from(&right_id)).as_ref(),
-                )),
-        )
-        .await
-        .expect("stacked shouldn't fail");
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+            let left_id = super::create_jujutsu_commit(&mut jj, "Other commit", "file 2");
+            jj.new_revision(
+                Some(crate::jj::RevSet::from(&base_change)),
+                None as Option<&str>,
+                false,
+            )
+            .expect("Couldn't create new revision on base");
+            let right_id = super::create_jujutsu_commit(&mut jj, "More commit", "file 3");
 
-        let left_revision = jj
-            .read_revision(&testing::config::basic(), left_id)
-            .expect("Couldn't read left revision");
-        let right_revision = jj
-            .read_revision(&testing::config::basic(), right_id)
-            .expect("Couldn't read right revision");
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default()
+                    .with_message(Some("message"))
+                    .with_revset(Some(
+                        crate::jj::RevSet::from(&left_id)
+                            .or(&crate::jj::RevSet::from(&right_id))
+                            .as_ref(),
+                    )),
+            )
+            .await
+            .expect("stacked shouldn't fail");
 
-        assert_eq!(
-            gh.pull_requests
-                .get(
-                    &right_revision
-                        .pull_request_number
-                        .expect("couldn't get PR# from right revision")
+            let left_revision = jj
+                .read_revision(&testing::config::basic(), left_id)
+                .expect("Couldn't read left revision");
+            let right_revision = jj
+                .read_revision(&testing::config::basic(), right_id)
+                .expect("Couldn't read right revision");
+
+            assert_eq!(
+                gh.pull_requests
+                    .get(
+                        &right_revision
+                            .pull_request_number
+                            .expect("couldn't get PR# from right revision")
+                    )
+                    .expect("Couldn't get PR from right revision")
+                    .base,
+                testing::config::basic().master_ref,
+                "Right revision PR was created to wrong branch"
+            );
+            assert_ne!(
+                gh.pull_requests
+                    .get(
+                        &left_revision
+                            .pull_request_number
+                            .expect("couldn't get PR# from left revision")
+                    )
+                    .expect("Couldn't get PR from left revision")
+                    .base,
+                testing::config::basic().master_ref,
+                "left revision PR was created to wrong branch"
+            );
+        }
+
+        #[tokio::test]
+        async fn different_bases() {
+            let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+            let base_change = jj
+                .revset_to_change_id(&crate::jj::RevSet::current().parent())
+                .expect("Should be able to find the base commit");
+            let second_base = testing::git::add_commit_on_and_push_to_remote(
+                &jj.git_repo,
+                "main",
+                [jj.resolve_revision_to_commit_id(base_change.as_ref())
+                    .expect("Should be able to find a commit for base change")],
+            );
+            jj.run_git_fetch().expect("Should be able to run git fetch");
+            let second_change = jj
+                .revset_to_change_id(&crate::jj::RevSet::from_arg(second_base.to_string()))
+                .expect("Expecting to find a change for the second base change");
+
+            jj.new_revision(
+                Some(crate::jj::RevSet::from(&base_change)),
+                None as Option<&str>,
+                false,
+            )
+            .expect("Couldn't create new revision on base");
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+            let left_id = super::create_jujutsu_commit(&mut jj, "Other commit", "file 2");
+            jj.new_revision(
+                Some(crate::jj::RevSet::from(&second_change)),
+                None as Option<&str>,
+                false,
+            )
+            .expect("Couldn't create new revision on base");
+            let right_id = super::create_jujutsu_commit(&mut jj, "More commit", "file 3");
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default()
+                    .with_message(Some("message"))
+                    .with_revset(Some(
+                        crate::jj::RevSet::from(&left_id)
+                            .or(&crate::jj::RevSet::from(&right_id))
+                            .as_ref(),
+                    )),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            let left_revision = jj
+                .read_revision(&testing::config::basic(), left_id.clone())
+                .expect("Couldn't read left revision");
+            let right_revision = jj
+                .read_revision(&testing::config::basic(), right_id.clone())
+                .expect("Couldn't read right revision");
+
+            assert_eq!(
+                gh.pull_requests
+                    .get(
+                        &right_revision
+                            .pull_request_number
+                            .expect("couldn't get PR# from right revision")
+                    )
+                    .expect("Couldn't get PR from right revision")
+                    .base,
+                testing::config::basic().master_ref,
+                "Right revision PR was created to wrong branch"
+            );
+            assert_ne!(
+                gh.pull_requests
+                    .get(
+                        &left_revision
+                            .pull_request_number
+                            .expect("couldn't get PR# from left revision")
+                    )
+                    .expect("Couldn't get PR from left revision")
+                    .base,
+                testing::config::basic().master_ref,
+                "left revision PR was created to wrong branch"
+            );
+
+            let left_pushed_id = {
+                let branch = jj
+                    .git_repo
+                    .find_branch("origin/spr/test/other-commit", git2::BranchType::Remote)
+                    .expect("Should be able to find a branch for the left side");
+
+                jj.revset_to_change_id(
+                    &crate::jj::RevSet::from_remote_branch(&branch, "origin")
+                        .expect("Should be able to build a revset for the left branch"),
                 )
-                .expect("Couldn't get PR from right revision")
-                .base,
-            testing::config::basic().master_ref,
-            "Right revision PR was created to wrong branch"
-        );
-        assert_ne!(
-            gh.pull_requests
-                .get(
-                    &left_revision
-                        .pull_request_number
-                        .expect("couldn't get PR# from left revision")
+                .expect("Should be able to find the ~hangeId")
+            };
+            let right_pushed_id = {
+                let branch = jj
+                    .git_repo
+                    .find_branch("origin/spr/test/more-commit", git2::BranchType::Remote)
+                    .expect("Should be able to find a branch for the right side");
+
+                jj.revset_to_change_id(
+                    &crate::jj::RevSet::from_remote_branch(&branch, "origin")
+                        .expect("Should be able to build a revset for the right branch"),
                 )
-                .expect("Couldn't get PR from left revision")
-                .base,
-            testing::config::basic().master_ref,
-            "left revision PR was created to wrong branch"
-        );
+                .expect("Should be able to find the ~hangeId")
+            };
+
+            assert_eq!(
+                base_change,
+                jj.revset_to_change_id(
+                    &crate::jj::RevSet::from(&second_change)
+                        .fork_point(&crate::jj::RevSet::from(&left_pushed_id))
+                )
+                .expect("Should be able to find a fork point for left branch"),
+                "The left side was based on too new a base"
+            );
+            assert_eq!(
+                second_change,
+                jj.revset_to_change_id(
+                    &crate::jj::RevSet::from(&second_change)
+                        .fork_point(&crate::jj::RevSet::from(&right_pushed_id))
+                )
+                .expect("Should be able to find a fork point for right branch"),
+                "The right side was based on the older base"
+            );
+        }
     }
-
     mod intended_fails {
         use crate::{jj::RevSet, testing};
 

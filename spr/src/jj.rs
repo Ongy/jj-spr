@@ -754,13 +754,8 @@ impl Jujutsu {
             .map(|v| v.trim().into())
     }
 
-    #[cfg(test)]
-    /// Testing only command.
-    /// This is a noop except for the side effects of running jj.
-    /// I.e. it'll update jj's view of the world.
-    /// This is useful after test setup commands, but otherwise useless.
     pub fn update(&mut self) -> Result<()> {
-        self.run_captured_with_args(["status"]).map(|_| {})
+        self.run_captured_with_args(["workspace", "update-stale"]).map(|_| {})
     }
 }
 
