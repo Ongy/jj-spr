@@ -371,7 +371,9 @@ impl GitHubAdapter for &mut GitHub {
             pull_request_id: pr
                 .node_id
                 .as_ref()
-                .expect("Every PR should have a node id")
+                .ok_or_else(|| {
+                    crate::error::Error::new(format!("PR {} does not have an node id.", pr.url))
+                })?
                 .to_string(),
             users: Some(reviewers.collect()),
         };
@@ -434,7 +436,9 @@ impl GitHubAdapter for &mut GitHub {
             assignable_id: pr
                 .node_id
                 .as_ref()
-                .expect("Every PR should have a node id")
+                .ok_or_else(|| {
+                    crate::error::Error::new(format!("PR {} does not have an node id.", pr.url))
+                })?
                 .to_string(),
         };
 
@@ -487,7 +491,12 @@ impl GitHubAdapter for &mut GitHub {
             .get(number)
             .await?;
         let variables = add_comment::Variables {
-            pull_request_id: octo_pr.node_id.expect("PR's should really have node ids"),
+            pull_request_id: octo_pr.node_id.ok_or_else(|| {
+                crate::error::Error::new(format!(
+                    "PR {} does not have a node-id? Not sure how to handle that.",
+                    octo_pr.url,
+                ))
+            })?,
             body: content.into(),
         };
 
