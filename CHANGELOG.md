@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Update dependencies
+
 ## [1.0.1] - 2026-02-22
 
 - Remove test that pins the version
