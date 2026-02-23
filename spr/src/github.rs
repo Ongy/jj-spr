@@ -599,7 +599,7 @@ impl GitHubAdapter for &mut GitHub {
         {
             return Err(crate::error::Error::new(format!("{:?}", errs)));
         }
-        todo!()
+        Ok(())
     }
 }
 
