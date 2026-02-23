@@ -75,11 +75,7 @@ where
     output("🔁", format!("Going to rebase {:?}", revset))?;
     jj.rebase_branch(
         &revset,
-        ChangeId::from(format!(
-            "{}@{}",
-            config.master_ref,
-            config.remote_name
-        )),
+        ChangeId::from(format!("{}@{}", config.master_ref, config.remote_name)),
     )?;
 
     Ok(())

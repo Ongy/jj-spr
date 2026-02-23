@@ -632,6 +632,12 @@ pub mod fakes {
         pub pull_requests: std::collections::BTreeMap<u64, PullRequest>,
     }
 
+    impl GitHub {
+        pub fn new() -> Self {
+            Self { pull_requests: std::collections::BTreeMap::new() }
+        }
+    }
+
     impl super::GithubPRComment for PullRequestComment {
         fn editable(&self) -> bool {
             self.editable

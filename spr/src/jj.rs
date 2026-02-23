@@ -524,7 +524,11 @@ impl Jujutsu {
         Ok(())
     }
 
-    pub fn bookmark_create<S: AsRef<str>>(&mut self, name: S, revision: Option<&str>) -> Result<()> {
+    pub fn bookmark_create<S: AsRef<str>>(
+        &mut self,
+        name: S,
+        revision: Option<&str>,
+    ) -> Result<()> {
         let mut args = vec!["bookmark", "create", name.as_ref()];
         if let Some(rev) = revision {
             args.extend(["-r", rev]);
@@ -655,10 +659,21 @@ impl Jujutsu {
             .map(|_| {})
     }
 
+    pub fn rebase(&mut self, revset: &RevSet, target: &RevSet) -> Result<()> {
+        self.run_captured_with_args([
+            "rebase",
+            "--source",
+            revset.as_ref(),
+            "--destination",
+            target.as_ref(),
+        ])
+        .map(|_| {})
+    }
+
     pub fn rebase_branch(&mut self, revset: &RevSet, target: ChangeId) -> Result<()> {
         self.run_captured_with_args([
             "rebase",
-            "-b",
+            "--branch",
             revset.as_ref(),
             "--destination",
             target.as_ref(),

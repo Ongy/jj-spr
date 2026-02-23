@@ -23,8 +23,14 @@ pub struct FetchOptions {
     all: bool,
 
     /// Whether to also merge in any code changes
-    #[clap(long)]
+    #[clap(long, required_if_eq("rebase", "true"))]
     pull_code_changes: bool,
+
+    /// Whether to update the revision order.
+    /// I.e. if the PR was rebased on github, revisions will be rebased locally.
+    /// Requires 'pull_code_changes' since it might mess up state otherwise.
+    #[clap(long)]
+    rebase: bool,
 }
 
 #[cfg(test)]
@@ -41,85 +47,130 @@ impl FetchOptions {
         self.pull_code_changes = true;
         self
     }
+
+    pub fn with_rebase(mut self) -> Self {
+        self.pull_code_changes = true;
+        self.rebase = true;
+        self
+    }
 }
 
-fn do_fetch<
+async fn do_fetch<
     I: IntoIterator<
         Item = (
             crate::jj::Revision,
             Option<impl crate::github::GHPullRequest>,
         ),
     >,
+    GH,
+    PR,
 >(
     opts: FetchOptions,
     jj: &mut crate::jj::Jujutsu,
+    mut gh: GH,
     config: &crate::config::Config,
     commits: I,
-) -> Result<()> {
+) -> Result<()>
+where
+    PR: crate::github::GHPullRequest,
+    GH: crate::github::GitHubAdapter<PRAdapter = PR>,
+{
     let mut failure = false;
     let mut items: Vec<_> = commits.into_iter().collect();
 
     for (revision, pull_request) in items.iter_mut() {
-        if let Some(pull_request) = pull_request {
-            // Ok, we want to update our local change with any code changes that were done upstream
-            if opts.pull_code_changes
-                && let Some(old_rev) = revision.message.get(&MessageSection::LastCommit)
-            {
-                let base_revset = {
-                    let base_commit = jj.git_repo.find_commit(git2::Oid::from_str(old_rev)?)?;
-                    RevSet::from(&base_commit)
-                };
-                let head_revset = {
-                    let head_branch = jj.git_repo.find_branch(
-                        format!("{}/{}", config.remote_name, pull_request.head_branch_name())
-                            .as_str(),
-                        git2::BranchType::Remote,
-                    )?;
-                    RevSet::from_remote_branch(&head_branch, &config.remote_name)?
-                };
-                // When we are based on the main branch, we'll potentially rebase.
-                // This only makes sense for changes on main.
+        let pull_request = if let Some(pull_request) = pull_request {
+            pull_request
+        } else {
+            continue;
+        };
+
+        // Ok, we want to update our local change with any code changes that were done upstream
+        if opts.pull_code_changes
+            && let Some(old_rev) = revision.message.get(&MessageSection::LastCommit)
+        {
+            if opts.rebase {
                 if pull_request.base_branch_name() == config.master_ref {
-                    let main_revset = {
-                        let main_branch = jj.git_repo.find_branch(
-                            format!("{}/{}", config.remote_name, config.master_ref).as_str(),
+                    // Ok, we want to rebase onto main...
+                    // But we don't intend to be based on HEAD but the forkpoint
+                    // This avoids unnecessary potential for conflict
+                    let base_head = {
+                        let branch = jj.git_repo.find_branch(
+                            format!("{}/{}", config.remote_name, config.master_ref).as_ref(),
                             git2::BranchType::Remote,
                         )?;
-                        RevSet::from_remote_branch(&main_branch, &config.remote_name)?
+                        crate::jj::RevSet::from_remote_branch(&branch, &config.remote_name)?
                     };
-
-                    let main_head_fork =
-                        jj.revset_to_change_id(&head_revset.fork_point(&main_revset))?;
-                    let main_change_fork = jj.revset_to_change_id(
-                        &RevSet::from(&revision.id).fork_point(&main_revset),
+                    jj.rebase(
+                        &crate::jj::RevSet::from(&revision.id),
+                        &crate::jj::RevSet::from(&revision.id).fork_point(&base_head),
                     )?;
+                } else {
+                    let base_pr = gh
+                        .pull_request_by_head(pull_request.base_branch_name())
+                        .await?;
 
-                    let forks_fork = jj.revset_to_change_id(
-                        &RevSet::from(&main_head_fork).fork_point(&RevSet::from(&main_change_fork)),
+                    let url = config.pull_request_url(base_pr.pr_number());
+
+                    jj.rebase(
+                        &crate::jj::RevSet::from(&revision.id),
+                        &RevSet::description(format!("substring:\"{}\"", url)).unique(),
                     )?;
-
-                    // I.e. HEAD's base is *ahead* of our base.
-                    // I.e. a user pressed the "merge base into PR" button
-                    // So we should update to also be based on that.
-                    if forks_fork == main_change_fork && main_change_fork != main_head_fork {
-                        jj.rebase_branch(&RevSet::from(&revision.id), main_head_fork)?;
-                    }
                 }
-
-                jj.squash_copy(&base_revset.to(&head_revset), revision.id.clone())?;
-                let new_latest_commit = jj.resolve_revision_to_commit_id(head_revset.as_ref())?;
-                revision
-                    .message
-                    .insert(MessageSection::LastCommit, new_latest_commit.to_string());
             }
 
+            let base_revset = {
+                let base_commit = jj.git_repo.find_commit(git2::Oid::from_str(old_rev)?)?;
+                RevSet::from(&base_commit)
+            };
+            let head_revset = {
+                let head_branch = jj.git_repo.find_branch(
+                    format!("{}/{}", config.remote_name, pull_request.head_branch_name()).as_str(),
+                    git2::BranchType::Remote,
+                )?;
+                RevSet::from_remote_branch(&head_branch, &config.remote_name)?
+            };
+            // When we are based on the main branch, we'll potentially rebase.
+            // This only makes sense for changes on main.
+            if pull_request.base_branch_name() == config.master_ref {
+                let main_revset = {
+                    let main_branch = jj.git_repo.find_branch(
+                        format!("{}/{}", config.remote_name, config.master_ref).as_str(),
+                        git2::BranchType::Remote,
+                    )?;
+                    RevSet::from_remote_branch(&main_branch, &config.remote_name)?
+                };
+
+                let main_head_fork =
+                    jj.revset_to_change_id(&head_revset.fork_point(&main_revset))?;
+                let main_change_fork =
+                    jj.revset_to_change_id(&RevSet::from(&revision.id).fork_point(&main_revset))?;
+
+                let forks_fork = jj.revset_to_change_id(
+                    &RevSet::from(&main_head_fork).fork_point(&RevSet::from(&main_change_fork)),
+                )?;
+
+                // I.e. HEAD's base is *ahead* of our base.
+                // I.e. a user pressed the "merge base into PR" button
+                // So we should update to also be based on that.
+                if forks_fork == main_change_fork && main_change_fork != main_head_fork {
+                    jj.rebase_branch(&RevSet::from(&revision.id), main_head_fork)?;
+                }
+            }
+
+            jj.squash_copy(&base_revset.to(&head_revset), revision.id.clone())?;
+            let new_latest_commit = jj.resolve_revision_to_commit_id(head_revset.as_ref())?;
             revision
                 .message
-                .insert(MessageSection::Title, pull_request.title().into());
-            revision
-                .message
-                .insert(MessageSection::Summary, pull_request.body().into());
+                .insert(MessageSection::LastCommit, new_latest_commit.to_string());
         }
+
+        revision
+            .message
+            .insert(MessageSection::Title, pull_request.title().into());
+        revision
+            .message
+            .insert(MessageSection::Summary, pull_request.body().into());
 
         failure = validate_commit_message(&revision.message).is_err() || failure;
     }
@@ -168,9 +219,11 @@ where
     do_fetch(
         opts,
         jj,
+        gh,
         config,
         std::iter::zip(revisions, pull_requests.into_iter()),
     )
+    .await
 }
 
 #[cfg(test)]
@@ -183,22 +236,31 @@ mod tests {
     };
     use std::fs;
 
-    fn create_jujutsu_commit(
+    fn create_jujutsu_commit_in_file(
         jj: &mut crate::jj::Jujutsu,
         message: &str,
         file_content: &str,
+        path: &str,
     ) -> ChangeId {
         // Create a file
         let file_path = jj
             .git_repo
             .workdir()
             .expect("Failed to extract workdir from JJ handle")
-            .join("my_file");
+            .join(path);
         fs::write(&file_path, file_content).expect("Failed to write test file");
 
         jj.commit(message).expect("Failed to commit revision");
         jj.revset_to_change_id(&RevSet::current().parent())
             .expect("Failed to get changeid of '@-'")
+    }
+
+    fn create_jujutsu_commit(
+        jj: &mut crate::jj::Jujutsu,
+        message: &str,
+        file_content: &str,
+    ) -> ChangeId {
+        create_jujutsu_commit_in_file(jj, message, file_content, "my_file")
     }
 
     #[tokio::test]
@@ -472,5 +534,129 @@ mod tests {
             .resolve_revision_to_commit_id(head_revset.fork_point(&RevSet::from(&rev)).as_ref())
             .expect("Couldn't find fork point of new revision and main commit");
         assert_eq!(fork_point, head, "Revision was rebased to older HEAD")
+    }
+
+    mod rebase_prs {
+        use crate::testing;
+
+        #[tokio::test]
+        async fn rebase_to_head() {
+            let (_dir, mut jj, _) = testing::setup::repo_with_origin();
+            let mut gh = crate::github::fakes::GitHub::new();
+            let parent = jj
+                .revset_to_change_id(&crate::jj::RevSet::current().parent())
+                .expect("Should be able to find a revset for the current's parent");
+
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+            let child_change = super::create_jujutsu_commit(&mut jj, "Other commit", "file 2");
+
+            crate::commands::push::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                crate::commands::push::PushOptions::default(),
+            )
+            .await
+            .expect("Should be able to push for setup");
+
+            gh.pull_requests
+                .get_mut(&2)
+                .expect("Should have created a PR with #2")
+                .base = testing::config::basic().master_ref;
+
+            super::super::fetch(
+                super::super::FetchOptions::default()
+                    .with_pull_code()
+                    .with_rebase()
+                    .with_revset(Some(child_change.as_ref())),
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+            )
+            .await
+            .expect("Should be able to fetch");
+
+            let revision = jj
+                .read_revision(&testing::config::basic(), child_change)
+                .expect("Should be able to read revision");
+            assert_eq!(
+                revision.parent_ids.as_slice(),
+                &[parent],
+                "Revision didn't get properly rebased"
+            );
+        }
+
+        #[tokio::test]
+        async fn rebase_onto_other() {
+            let (_dir, mut jj, _) = testing::setup::repo_with_origin();
+            let mut gh = crate::github::fakes::GitHub::new();
+            let parent = jj
+                .revset_to_change_id(&crate::jj::RevSet::current().parent())
+                .expect("Should be able to find a revset for the current's parent");
+
+            let base_change = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+            jj.new_revision(
+                Some(crate::jj::RevSet::from(&parent)),
+                None as Option<&str>,
+                false,
+            )
+            .expect("Should be able to create new revision");
+            let child_change = super::create_jujutsu_commit(&mut jj, "Other commit", "file 2");
+
+            crate::commands::push::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                crate::commands::push::PushOptions::default().with_revset(Some(
+                    crate::jj::RevSet::from(&base_change)
+                        .or(&crate::jj::RevSet::from(&child_change))
+                        .as_ref(),
+                )),
+            )
+            .await
+            .expect("Should be able to push for setup");
+
+            let base_pr = jj
+                .read_revision(&testing::config::basic(), base_change.clone())
+                .expect("should be able to read base revision")
+                .pull_request_number
+                .expect("base change should have a PR");
+            let child_pr = jj
+                .read_revision(&testing::config::basic(), child_change.clone())
+                .expect("should be able to read child revision")
+                .pull_request_number
+                .expect("child change should have a PR");
+
+            gh.pull_requests
+                .get_mut(&child_pr)
+                .expect("Should have created a PR with #2")
+                .base = gh
+                .pull_requests
+                .get(&base_pr)
+                .expect("Should have a PR #1 created")
+                .head
+                .clone();
+
+            super::super::fetch(
+                super::super::FetchOptions::default()
+                    .with_pull_code()
+                    .with_rebase()
+                    .with_revset(Some(child_change.as_ref())),
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+            )
+            .await
+            .expect("Should be able to fetch");
+
+            let revision = jj
+                .read_revision(&testing::config::basic(), child_change)
+                .expect("Should be able to read revision");
+            assert_eq!(
+                revision.parent_ids.as_slice(),
+                &[base_change],
+                "Revision didn't get properly rebased"
+            );
+        }
     }
 }
