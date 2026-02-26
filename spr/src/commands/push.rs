@@ -8,10 +8,6 @@ use crate::{
 use git2::Oid;
 use std::{io::ErrorKind, iter::zip};
 
-static FORK_CHAR: &str = "┣";
-static CONT_CHAR: &str = "┃";
-static SPACE_CHAR: &str = " ";
-
 #[derive(Debug, clap::Parser, Default)]
 pub struct PushOptions {
     #[clap(long, short = 'm')]
@@ -277,17 +273,21 @@ fn prepare_revision_comment(
         children => {
             let mut child_lines = Vec::new();
             for child in children {
-                let indent = [String::from(SPACE_CHAR)]
+                let indent = [config.drawing.space.clone()]
                     .into_iter()
                     .cycle()
                     .take(child.width() * 2 - 1)
                     .reduce(|l, r| format!("{l}{r}"))
-                    .unwrap_or(String::from(SPACE_CHAR));
+                    .unwrap_or(config.drawing.space.clone());
                 let new_lines = prepare_revision_comment(child, config);
                 let old_lines = child_lines.into_iter().enumerate().map(|(i, l)| {
                     format!(
                         "{}{}{}",
-                        if i == 0 { FORK_CHAR } else { CONT_CHAR },
+                        if i == 0 {
+                            &config.drawing.fork
+                        } else {
+                            &config.drawing.cont
+                        },
                         indent,
                         l
                     )
@@ -1576,7 +1576,8 @@ pub mod tests {
                 message: std::collections::BTreeMap::new(),
                 bookmarks: Vec::new(),
             });
-            let lines = super::super::prepare_revision_comment(&tree, &testing::config::basic());
+            let config = testing::config::basic();
+            let lines = super::super::prepare_revision_comment(&tree, &config);
             let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
 
             assert_eq!(
@@ -1585,8 +1586,8 @@ pub mod tests {
                     "• [My Title](https://github.com/test_owner/test_repo/pull/1)",
                     format!(
                         "{}{}{}",
-                        super::super::FORK_CHAR,
-                        super::super::SPACE_CHAR,
+                        config.drawing.fork,
+                        config.drawing.space,
                         "• [My Other Title](https://github.com/test_owner/test_repo/pull/2)"
                     )
                     .as_ref(),
@@ -1631,7 +1632,8 @@ pub mod tests {
                 message: std::collections::BTreeMap::new(),
                 bookmarks: Vec::new(),
             });
-            let lines = super::super::prepare_revision_comment(&tree, &testing::config::basic());
+            let config = testing::config::basic();
+            let lines = super::super::prepare_revision_comment(&tree, &config);
             let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
 
             assert_eq!(
@@ -1640,15 +1642,15 @@ pub mod tests {
                     "• [My Title](https://github.com/test_owner/test_repo/pull/1)",
                     format!(
                         "{}{}{}",
-                        super::super::FORK_CHAR,
-                        super::super::SPACE_CHAR,
+                        config.drawing.fork,
+                        config.drawing.space,
                         "• [My Third Title](https://github.com/test_owner/test_repo/pull/3)"
                     )
                     .as_ref(),
                     format!(
                         "{}{}{}",
-                        super::super::CONT_CHAR,
-                        super::super::SPACE_CHAR,
+                        config.drawing.cont,
+                        config.drawing.space,
                         "• [My Fourth Title](https://github.com/test_owner/test_repo/pull/4)"
                     )
                     .as_ref(),

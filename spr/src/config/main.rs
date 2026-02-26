@@ -16,6 +16,8 @@ pub struct Config {
     pub remote_name: String,
     pub master_ref: String,
     pub branch_prefix: String,
+
+    pub drawing: super::drawing::Drawing,
 }
 
 impl Config {
@@ -25,6 +27,7 @@ impl Config {
         remote_name: String,
         master_ref: String,
         branch_prefix: String,
+        drawing: super::drawing::Drawing,
     ) -> Self {
         Self {
             owner,
@@ -32,6 +35,7 @@ impl Config {
             remote_name,
             master_ref,
             branch_prefix,
+            drawing,
         }
     }
 
@@ -59,8 +63,8 @@ impl Config {
         );
         let m = regex.captures(text);
         if let Some(caps) = m
-//            && self.owner == caps.get(1).unwrap().as_str()
-//            && self.repo == caps.get(2).unwrap().as_str()
+        //            && self.owner == caps.get(1).unwrap().as_str()
+        //            && self.repo == caps.get(2).unwrap().as_str()
         {
             return Some(caps.get(3).unwrap().as_str().parse().unwrap());
         }
@@ -221,6 +225,7 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
     }?;
     let master_branch = default_branch_from_jj(jj)?;
     let (repo, owner) = repo_and_owner_from_jj(jj, remote_name.as_ref())?;
+    let drawing = super::drawing::from_jj(jj)?;
 
     Ok(Config::new(
         owner,
@@ -228,6 +233,7 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
         remote_name,
         master_branch,
         branch_prefix,
+        drawing,
     ))
 }
 
@@ -310,18 +316,10 @@ pub fn set_jj_config(key: &str, value: &str, repo_path: &std::path::Path) -> Res
 
 #[cfg(test)]
 mod tests {
+    use crate::testing;
+
     // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
-
-    fn config_factory() -> Config {
-        crate::config::Config::new(
-            "acme".into(),
-            "codez".into(),
-            "origin".into(),
-            "master".into(),
-            "spr/foo/".into(),
-        )
-    }
 
     #[test]
     fn test_set_jj_config_success() {
@@ -436,17 +434,17 @@ mod tests {
 
     #[test]
     fn test_pull_request_url() {
-        let gh = config_factory();
+        let gh = testing::config::basic();
 
         assert_eq!(
             &gh.pull_request_url(123),
-            "https://github.com/acme/codez/pull/123"
+            "https://github.com/test_owner/test_repo/pull/123"
         );
     }
 
     #[test]
     fn test_parse_pull_request_field_empty() {
-        let gh = config_factory();
+        let gh = testing::config::basic();
 
         assert_eq!(gh.parse_pull_request_field(""), None);
         assert_eq!(gh.parse_pull_request_field("   "), None);
@@ -455,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_parse_pull_request_field_number() {
-        let gh = config_factory();
+        let gh = testing::config::basic();
 
         assert_eq!(gh.parse_pull_request_field("123"), Some(123));
         assert_eq!(gh.parse_pull_request_field("   123 "), Some(123));
@@ -465,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_parse_pull_request_field_url() {
-        let gh = config_factory();
+        let gh = testing::config::basic();
 
         assert_eq!(
             gh.parse_pull_request_field("https://github.com/acme/codez/pull/123"),
@@ -519,8 +517,7 @@ mod tests {
                 "Failed to build default branch prefix"
             );
             assert_eq!(
-                config.master_ref,
-                "main",
+                config.master_ref, "main",
                 "Failed to guess default target branch"
             );
         }
@@ -550,8 +547,7 @@ mod tests {
                 "Failed to build default branch prefix"
             );
             assert_eq!(
-                config.master_ref,
-                "dev",
+                config.master_ref, "dev",
                 "Failed to guess default target branch"
             );
         }
@@ -595,8 +591,7 @@ mod tests {
                 "Failed to read branch prefix from config"
             );
             assert_eq!(
-                config.master_ref,
-                "branch",
+                config.master_ref, "branch",
                 "Failed to read target branch from config"
             );
         }
