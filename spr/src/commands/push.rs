@@ -560,12 +560,12 @@ pub mod tests {
 
         let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
 
-        let gh = crate::github::fakes::GitHub {
+        let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
         super::push(
             &mut jj,
-            gh,
+            &mut gh,
             &testing::config::basic(),
             super::PushOptions::default().with_message(Some("message")),
         )
@@ -1024,12 +1024,12 @@ pub mod tests {
         jj.bookmark_create("my-custom-bookmark", Some(commit_id.as_ref()))
             .expect("Failed to create bookmark");
 
-        let gh = crate::github::fakes::GitHub {
+        let mut gh = crate::github::fakes::GitHub {
             pull_requests: std::collections::BTreeMap::new(),
         };
         super::push(
             &mut jj,
-            gh,
+            &mut gh,
             &testing::config::basic(),
             super::PushOptions::default().with_message(Some("message")),
         )

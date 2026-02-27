@@ -153,7 +153,7 @@ mod tests {
                 no_checkout: true,
             },
             &mut jj,
-            crate::github::fakes::GitHub {
+            &mut crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
                     pr_nr,
                     crate::github::fakes::PullRequest::new(
@@ -229,7 +229,7 @@ mod tests {
                 no_checkout: true,
             },
             &mut jj,
-            crate::github::fakes::GitHub {
+            &mut crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([
                     (
                         pr_nr,
@@ -340,7 +340,7 @@ mod tests {
                 no_checkout: true,
             },
             &mut jj,
-            gh.clone(),
+            &mut gh.clone(),
             &testing::config::basic(),
         )
         .await
@@ -352,7 +352,7 @@ mod tests {
                 no_checkout: true,
             },
             &mut jj,
-            gh.clone(),
+            &mut gh.clone(),
             &testing::config::basic(),
         )
         .await
