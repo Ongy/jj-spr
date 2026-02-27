@@ -48,6 +48,11 @@ impl PushOptions {
         self
     }
 
+    pub fn with_all(mut self, val: bool) -> Self {
+        self.all = val;
+        self
+    }
+
     pub fn with_existing(mut self, val: bool) -> Self {
         self.existing = val;
         self
@@ -178,11 +183,11 @@ async fn do_push_single<H: AsRef<str>>(
 }
 
 #[derive(Debug, Clone)]
-struct BranchAction {
+struct BranchAction<PR> {
     revision: crate::jj::Revision,
     head_branch: String,
     base_branch: String,
-    existing_nr: Option<u64>,
+    old_pr: Option<PR>,
 }
 
 async fn do_push<I, PR>(
@@ -191,13 +196,13 @@ async fn do_push<I, PR>(
     opts: &PushOptions,
     revisions: I,
     trunk_head: &crate::jj::RevSet,
-) -> Result<Vec<BranchAction>>
+) -> Result<Vec<BranchAction<PR>>>
 where
     PR: crate::github::GHPullRequest,
     I: IntoIterator<Item = (crate::jj::Revision, Option<PR>)>,
 {
     // ChangeID, head branch, base branch, existing pr
-    let mut seen: Vec<BranchAction> = Vec::new();
+    let mut seen: Vec<BranchAction<PR>> = Vec::new();
     for (mut revision, maybe_pr) in revisions.into_iter() {
         let head_ref: String = if let Some(ref pr) = maybe_pr {
             pr.head_branch_name().into()
@@ -212,9 +217,7 @@ where
                 .unwrap_or("");
             config.get_new_branch_name(&jj.get_all_ref_names()?, title)
         };
-        let base_branch = if let Some(ref pr) = maybe_pr {
-            Some(pr.base_branch_name())
-        } else if let Some(ba) = seen
+        let base_branch = if let Some(ba) = seen
             .iter()
             .find(|ba| ba.revision.id == revision.parent_ids[0])
         {
@@ -246,7 +249,7 @@ where
             revision,
             head_branch: head_ref,
             base_branch: base_branch.unwrap_or(config.master_ref.as_ref()).into(),
-            existing_nr: maybe_pr.map(|pr| pr.pr_number()),
+            old_pr: maybe_pr,
         });
     }
     Ok(seen)
@@ -415,7 +418,10 @@ where
     let mut actions = do_push(config, jj, &opts, zip(revisions, pull_requests), &trunk).await?;
     for action in actions.iter_mut().into_iter() {
         // We don't know what to do with these yet...
-        if let Some(_) = action.existing_nr {
+        if let Some(ref pr) = action.old_pr {
+            if action.base_branch != pr.base_branch_name() {
+                gh.rebase_pr(pr.pr_number(), &action.base_branch).await?;
+            }
             // This will at least write the current commit message.
             jj.update_revision_message(&action.revision)?;
             continue;
@@ -1046,6 +1052,93 @@ pub mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
         assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
+    }
+
+    mod rebase_prs {
+        use crate::testing;
+
+        #[tokio::test]
+        async fn to_main() {
+            let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+            gh.pull_requests
+                .get_mut(&1)
+                .expect("Should have created PR 1")
+                .base = String::from("spr/test/my-commit");
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            assert_eq!(
+                gh.pull_requests.get(&1).expect("Should still have PR").base,
+                testing::config::basic().master_ref,
+                "PR base was not updated"
+            );
+        }
+
+        #[tokio::test]
+        async fn to_base_main() {
+            let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+            let trunk_rev = crate::jj::RevSet::from(
+                &jj.revset_to_change_id(&crate::jj::RevSet::current().parent())
+                    .expect("Should have changeID for current"),
+            );
+            let first_id = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+            jj.new_revision(Some(trunk_rev), None as Option<&str>, false)
+                .expect("Should be able to new onto something else");
+
+            let second_id = super::create_jujutsu_commit_in_file(
+                &mut jj,
+                "Other commit",
+                "Other content",
+                "other file",
+            );
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default()
+                    .with_all(true)
+                    .with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+            jj.rebase_branch(&crate::jj::RevSet::from(&second_id), first_id)
+                .expect("Should be able to rebase change");
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            assert_ne!(
+                gh.pull_requests.get(&2).expect("Should still have PR").base,
+                testing::config::basic().master_ref,
+                "PR base was not updated"
+            );
+        }
     }
 
     mod revset {

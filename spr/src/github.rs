@@ -76,6 +76,15 @@ pub struct AddComment;
 )]
 pub struct OldComments;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/gql/schema.docs.graphql",
+    query_path = "src/gql/update_issuecomment.graphql",
+    variables_derives = "Clone, Debug",
+    response_derives = "Clone, Debug"
+)]
+pub struct UpdatePRBase;
+
 impl GitHub {
     pub fn new(config: crate::config::Config, crab: octocrab::Octocrab) -> Self {
         Self { config, crab }
@@ -204,6 +213,14 @@ pub trait GitHubAdapter {
             return self.post_comment(number, content).await;
         }
     }
+
+    fn rebase_pr<S>(
+        &mut self,
+        number: u64,
+        new_base: S,
+    ) -> impl std::future::Future<Output = crate::error::Result<()>>
+    where
+        S: Into<String>;
 }
 
 pub trait GHPullRequest {
@@ -557,6 +574,33 @@ impl GitHubAdapter for &mut GitHub {
 
         Ok(comments)
     }
+
+    async fn rebase_pr<S>(&mut self, number: u64, new_base: S) -> crate::error::Result<()>
+    where
+        S: Into<String>,
+    {
+        let octo_pr = self
+            .crab
+            .pulls(self.config.owner.clone(), self.config.repo.clone())
+            .get(number)
+            .await?;
+
+        let variables = update_pr_base::Variables {
+            pull_request_id: octo_pr.node_id.ok_or_else(|| crate::error::Error::new("Couldn't find id for PR"))?,
+            branch: new_base.into(),
+        };
+
+        let resp: graphql_client::Response<update_pr_base::ResponseData> = self
+            .crab
+            .graphql(&UpdatePRBase::build_query(variables))
+            .await?;
+        if let Some(errs) = resp.errors
+            && !errs.is_empty()
+        {
+            return Err(crate::error::Error::new(format!("{:?}", errs)));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -785,6 +829,17 @@ pub mod fakes {
 
             Err(crate::error::Error::new("Couldn't find the comment"))
         }
+
+        async fn rebase_pr<S>(&mut self, number: u64, new_base: S) -> crate::error::Result<()>
+        where
+            S: Into<String>,
+        {
+            self.pull_requests
+                .get_mut(&number)
+                .ok_or_else(|| crate::error::Error::new("no such pr :("))?
+                .base = new_base.into();
+            Ok(())
+        }
     }
 
     impl super::GitHubAdapter for &mut GitHub {
@@ -925,6 +980,17 @@ pub mod fakes {
             }
 
             Err(crate::error::Error::new("Couldn't find the comment"))
+        }
+
+        async fn rebase_pr<S>(&mut self, number: u64, new_base: S) -> crate::error::Result<()>
+        where
+            S: Into<String>,
+        {
+            self.pull_requests
+                .get_mut(&number)
+                .ok_or_else(|| crate::error::Error::new("no such pr :("))?
+                .base = new_base.into();
+            Ok(())
         }
     }
 }
