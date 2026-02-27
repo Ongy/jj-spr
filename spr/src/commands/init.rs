@@ -11,11 +11,10 @@ use lazy_regex::regex;
 use crate::{
     config::{AuthTokenSource, get_auth_token_with_source},
     error::{Error, Result, ResultExt},
-    output::output,
 };
 
 pub async fn init() -> Result<()> {
-    output("👋", "Welcome to spr!")?;
+    crate::output::output(crate::output::Icons::Wave, "Welcome to spr!")?;
 
     let path = std::env::current_dir()?;
     let repo = git2::Repository::discover(path.clone()).reword(formatdoc!(
@@ -30,8 +29,8 @@ pub async fn init() -> Result<()> {
 
     console::Term::stdout().write_line("")?;
 
-    output(
-        "🔑",
+    crate::output::output(
+        crate::output::Icons::Key,
         "Okay, let's get started. First we need to authenticate to GitHub.",
     )?;
 
@@ -58,8 +57,8 @@ pub async fn init() -> Result<()> {
     let pat = if reuse_token {
         github_auth_token.unwrap().token().to_owned()
     } else {
-        output(
-            "  ",
+        crate::output::output(
+            crate::output::Icons::Info,
             &formatdoc!(
                 "We need a 'Personal Access Token' from GitHub. This will \
              authorise spr to open/update/merge Pull Requests etc. on behalf of \
@@ -91,7 +90,10 @@ pub async fn init() -> Result<()> {
         .build()?;
     let github_user = octocrab.current().user().await?;
 
-    output("👋", &formatdoc!("Hello {}!", github_user.login))?;
+    crate::output::output(
+        crate::output::Icons::Wave,
+        &formatdoc!("Hello {}!", github_user.login),
+    )?;
 
     if !reuse_token {
         let scope = dialoguer::Input::<String>::new()
@@ -135,8 +137,8 @@ pub async fn init() -> Result<()> {
         Err(_) => {
             // Name of the GitHub repo
             console::Term::stdout().write_line("")?;
-            output(
-                "❓",
+            crate::output::output(
+                crate::output::Icons::Question,
                 &formatdoc!(
                     "What's the name of the GitHub repository. Please enter \
              'OWNER/REPOSITORY' (basically the bit that follow \
@@ -198,8 +200,8 @@ pub async fn init() -> Result<()> {
             .and_then(|value| if value.is_empty() { None } else { Some(value) })
             .unwrap_or_else(|| format!("spr/{}/", &github_user.login));
 
-        output(
-            "❓",
+        crate::output::output(
+            crate::output::Icons::Question,
             &formatdoc!(
                 "What prefix should be used when naming Pull Request branches?
              Good practice is to begin with 'spr/' as a general namespace \
