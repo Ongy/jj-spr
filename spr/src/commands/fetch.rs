@@ -9,7 +9,6 @@ use crate::{
     error::{Error, Result},
     jj::RevSet,
     message::{MessageSection, validate_commit_message},
-    output::output,
 };
 
 #[derive(Debug, clap::Parser, Default)]
@@ -121,7 +120,7 @@ fn do_fetch<
                 .insert(MessageSection::Summary, pull_request.body().into());
         }
 
-        failure = validate_commit_message(&revision.message).is_err() || failure;
+        failure = validate_commit_message(config, &revision.message).is_err() || failure;
     }
     for (rev, _) in items.into_iter() {
         jj.update_revision_message(&rev)?;
@@ -157,7 +156,10 @@ where
     )?;
 
     if revisions.is_empty() {
-        output("👋", "No commits found - nothing to do. Good bye!")?;
+        crate::output::output(
+            &config.icons.wave,
+            "No commits found - nothing to do. Good bye!",
+        )?;
         return Ok(());
     }
 
