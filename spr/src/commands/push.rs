@@ -105,7 +105,7 @@ async fn do_push_single<H: AsRef<str>>(
         } else {
             "No update necessary".into()
         };
-        crate::output::output(crate::output::Icons::OK, message.as_str())?;
+        crate::output::output(&config.icons.ok, message.as_str())?;
         return Ok(());
     }
 
@@ -166,7 +166,7 @@ async fn do_push_single<H: AsRef<str>>(
 
     if let Some(pr) = revision.pull_request_number {
         crate::output::output(
-            crate::output::Icons::OK,
+            &config.icons.ok,
             if parents.len() == 1 {
                 format!("Updated {}", config.pull_request_url(pr))
             } else {
@@ -395,7 +395,7 @@ where
     // We need the trunk's commit's OID. The first pull request (made against upstream trunk) needs it to start the chain.
     if revisions.is_empty() {
         crate::output::output(
-            crate::output::Icons::Wave,
+            &config.icons.wave,
             "No commits found - nothing to do. Good bye!",
         )?;
         return Ok(());
@@ -446,7 +446,7 @@ where
         let pull_request_url = config.pull_request_url(pr.pr_number());
 
         crate::output::output(
-            crate::output::Icons::Sparkle,
+            &config.icons.sparkle,
             &format!(
                 "Created new Pull Request #{}: {}",
                 pr.pr_number(),
@@ -489,7 +489,7 @@ where
                 }
                 None => {
                     crate::output::output(
-                        crate::output::Icons::Error,
+                        &config.icons.error,
                         format!(
                             "Change {:?} has no PR attached. This is a bug at this point",
                             rev.id

@@ -5,9 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::{
-    error::{Error, Result},
-};
+use crate::error::{Error, Result};
 
 pub type MessageSectionsMap = std::collections::BTreeMap<MessageSection, String>;
 
@@ -180,16 +178,16 @@ pub fn build_github_body_for_merging(section_texts: &MessageSectionsMap) -> Stri
     )
 }
 
-pub fn validate_commit_message(message: &MessageSectionsMap) -> Result<()> {
+pub fn validate_commit_message(
+    config: &crate::config::Config,
+    message: &MessageSectionsMap,
+) -> Result<()> {
     let title_missing_or_empty = match message.get(&MessageSection::Title) {
         None => true,
         Some(title) => title.is_empty(),
     };
     if title_missing_or_empty {
-        crate::output::output(
-            crate::output::Icons::Error,
-            "Commit message does not have a title!",
-        )?;
+        crate::output::output(&config.icons.error, "Commit message does not have a title!")?;
         return Err(Error::empty());
     }
 
