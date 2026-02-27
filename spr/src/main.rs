@@ -77,8 +77,12 @@ pub async fn spr() -> Result<()> {
     }
 
     // Discover the Jujutsu repository and get the colocated Git repo
-    let current_dir = std::env::current_dir()?;
-    let repo = git2::Repository::discover(&current_dir)?;
+    let current_dir =
+        std::env::current_dir().context(format!("Failed to find the working directory"))?;
+    let repo = git2::Repository::discover(&current_dir).context(format!(
+        "Failed to find git repo in {}",
+        current_dir.as_path().to_string_lossy()
+    ))?;
 
     // Verify this is a Jujutsu repository by checking for .jj directory
     let repo_path = repo
@@ -106,13 +110,21 @@ pub async fn spr() -> Result<()> {
 
     let crab = octocrab::OctocrabBuilder::default()
         .personal_token(github_auth_token.clone())
-        .build()?;
+        .build()
+        .context(String::from("Creating GH client"))?;
 
     let mut headers = header::HeaderMap::new();
-    headers.insert(header::ACCEPT, "application/json".parse()?);
+    headers.insert(
+        header::ACCEPT,
+        "application/json"
+            .parse()
+            .expect("Shouldn't have issues parsing literal"),
+    );
     headers.insert(
         header::USER_AGENT,
-        format!("spr/{}", env!("CARGO_PKG_VERSION")).try_into()?,
+        format!("spr/{}", env!("CARGO_PKG_VERSION"))
+            .try_into()
+            .expect("Shouldn't have issues parsing literal"),
     );
     headers.insert(
         header::AUTHORIZATION,
@@ -120,10 +132,15 @@ pub async fn spr() -> Result<()> {
     );
 
     let config = config::from_jj(&jj, async || {
-        let user = crab.current().user().await?;
+        let user = crab
+            .current()
+            .user()
+            .await
+            .context(String::from("Get current user from github"))?;
         Ok(user.login)
     })
-    .await?;
+    .await
+    .context(String::from("Read configuration"))?;
     let mut gh = jj_spr::github::GitHub::new(config.clone(), crab);
 
     match cli.command {

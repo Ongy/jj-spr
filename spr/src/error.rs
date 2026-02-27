@@ -41,13 +41,78 @@ impl Error {
     }
 }
 
-impl<E> From<E> for Error
-where
-    E: std::error::Error,
-{
-    fn from(error: E) -> Self {
+impl From<reqwest::header::InvalidHeaderValue> for Error {
+    fn from(error: reqwest::header::InvalidHeaderValue) -> Self {
         Self {
             messages: vec![format!("{}", error)],
+        }
+    }
+}
+
+impl From<std::string::FromUtf8Error> for Error {
+    fn from(error: std::string::FromUtf8Error) -> Self {
+        Self {
+            messages: vec![format!("{}", error)],
+        }
+    }
+}
+
+impl From<tokio::task::JoinError> for Error {
+    fn from(error: tokio::task::JoinError) -> Self {
+        Self {
+            messages: vec![format!("{}", error)],
+        }
+    }
+}
+
+impl From<dialoguer::Error> for Error {
+    fn from(error: dialoguer::Error) -> Self {
+        Self {
+            messages: vec![format!("{}", error)],
+        }
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(error: serde_json::Error) -> Self {
+        Self {
+            messages: vec![format!("{}", error)],
+        }
+    }
+}
+
+impl From<git2::Error> for Error {
+    fn from(error: git2::Error) -> Self {
+        Self {
+            messages: vec![format!("{}", error)],
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(error: std::io::Error) -> Self {
+        Self {
+            messages: vec![format!("{}", error)],
+        }
+    }
+}
+
+impl From<octocrab::Error> for Error {
+    fn from(error: octocrab::Error) -> Self {
+        match error {
+            octocrab::Error::GitHub { source, backtrace } => {
+                let content = if backtrace.status() == std::backtrace::BacktraceStatus::Disabled {
+                    format!("GitHub Error: {source}")
+                } else {
+                    format!("GitHub Error: {source}: {backtrace:?}")
+                };
+                Self {
+                    messages: vec![content],
+                }
+            }
+            e => Self {
+                messages: vec![format!("{}", e)],
+            },
         }
     }
 }
@@ -70,34 +135,10 @@ pub trait ResultExt {
     fn context(self, message: String) -> Self::Output;
     fn reword(self, message: String) -> Self::Output;
 }
-impl<T> ResultExt for Result<T> {
-    type Output = Self;
-
-    fn convert(self) -> Self {
-        self
-    }
-
-    fn context(mut self, message: String) -> Self {
-        if let Err(error) = &mut self {
-            error.push(message);
-        }
-
-        self
-    }
-
-    fn reword(mut self, message: String) -> Self {
-        if let Err(error) = &mut self {
-            error.messages.pop();
-            error.push(message);
-        }
-
-        self
-    }
-}
 
 impl<T, E> ResultExt for std::result::Result<T, E>
 where
-    E: std::error::Error,
+    E: Into<Error>,
 {
     type Output = Result<T>;
 
@@ -109,55 +150,24 @@ where
     }
 
     fn context(self, message: String) -> Result<T> {
-        self.convert().context(message)
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                let mut err = e.into();
+                err.messages.push(message);
+                Err(err)
+            }
+        }
     }
 
     fn reword(self, message: String) -> Result<T> {
-        self.convert().reword(message)
-    }
-}
-
-pub struct Terminator {
-    error: Error,
-}
-
-impl From<Error> for Terminator {
-    fn from(error: Error) -> Self {
-        Self { error }
-    }
-}
-
-impl std::fmt::Debug for Terminator {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "🛑 ")?;
-        for message in self.error.messages.iter().rev() {
-            writeln!(f, "{}", message)?;
-        }
-        Ok(())
-    }
-}
-
-impl<E> From<E> for Terminator
-where
-    E: std::error::Error,
-{
-    fn from(error: E) -> Self {
-        Self {
-            error: error.into(),
-        }
-    }
-}
-
-pub fn add_error<T, U>(result: &mut Result<T>, other: Result<U>) -> Option<U> {
-    match other {
-        Ok(result) => Some(result),
-        Err(error) => {
-            if let Err(e) = result {
-                e.messages.extend(error.messages);
-            } else {
-                *result = Err(error);
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                let mut err = e.into();
+                err.messages = vec![message];
+                Err(err)
             }
-            None
         }
     }
 }
