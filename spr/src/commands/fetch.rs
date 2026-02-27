@@ -222,7 +222,7 @@ mod tests {
         super::fetch(
             FetchOptions::default(),
             &mut jj,
-            crate::github::fakes::GitHub {
+            &mut crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
                     1,
                     crate::github::fakes::PullRequest::new(
@@ -294,7 +294,7 @@ mod tests {
                 .with_revset(Some(rev.as_ref()))
                 .with_pull_code(),
             &mut jj,
-            crate::github::fakes::GitHub {
+            &mut crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
                     1,
                     crate::github::fakes::PullRequest::new(
@@ -382,7 +382,7 @@ mod tests {
                 .with_revset(Some(rev.as_ref()))
                 .with_pull_code(),
             &mut jj,
-            crate::github::fakes::GitHub {
+            &mut crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
                     1,
                     crate::github::fakes::PullRequest::new(
@@ -453,7 +453,7 @@ mod tests {
                 .with_revset(Some(rev.as_ref()))
                 .with_pull_code(),
             &mut jj,
-            crate::github::fakes::GitHub {
+            &mut crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
                     1,
                     crate::github::fakes::PullRequest::new(
