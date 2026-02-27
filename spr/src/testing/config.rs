@@ -7,5 +7,6 @@ pub fn basic() -> crate::config::Config {
         "origin".into(),
         "main".into(),
         "spr/test/".into(),
+        crate::config::drawing::Drawing::default(),
     )
 }
