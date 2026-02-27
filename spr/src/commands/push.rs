@@ -23,6 +23,9 @@ pub struct PushOptions {
     #[clap(long, short = 'a', group = "revs")]
     all: bool,
 
+    #[clap(long, group = "revs")]
+    existing: bool,
+
     #[clap(long, short = 'f')]
     force: bool,
 }
@@ -47,6 +50,11 @@ impl PushOptions {
 
     pub fn with_force(mut self, val: bool) -> Self {
         self.force = val;
+        self
+    }
+
+    pub fn with_existing(mut self, val: bool) -> Self {
+        self.existing = val;
         self
     }
 }
@@ -342,15 +350,16 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
-    let heads = opts
-        .revset
-        .as_ref()
-        .map(|s| RevSet::from_arg(s))
-        .unwrap_or(if opts.all {
-            RevSet::mutable().heads()
-        } else {
-            RevSet::current()
-        });
+    let heads = opts.revset.as_ref().map(|s| RevSet::from_arg(s)).unwrap_or(
+        match (opts.all, opts.existing) {
+            (true, false) => RevSet::mutable().heads(),
+            (false, true) => {
+                RevSet::mutable().and(&RevSet::description("substring:\"Last Commit:\""))
+            }
+            (false, false) => RevSet::current(),
+            _ => unreachable!(),
+        },
+    );
     // Get revisions to process
     // The pattern builds:
     // * ::@: Every ancestor of the current revision (including the current reveision)
@@ -1032,6 +1041,62 @@ pub mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
         assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
+    }
+
+    mod revset {
+        use crate::testing;
+
+        #[tokio::test]
+        async fn existing() {
+            let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            let pr_branch = bare
+                .find_branch("spr/test/test-commit", git2::BranchType::Local)
+                .expect("Expected to find branch on bare upstream");
+            let initial_pr_oid = pr_branch
+                .get()
+                .target()
+                .expect("Failed to get oid from pr branch");
+
+            let _ = super::create_jujutsu_commit(&mut jj, "Test other commit", "file other");
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default()
+                    .with_existing(true)
+                    .with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            let pr_branch = bare
+                .find_branch("spr/test/test-commit", git2::BranchType::Local)
+                .expect("Expected to find branch on bare upstream");
+            let pr_oid = pr_branch
+                .get()
+                .target()
+                .expect("Failed to get oid from pr branch");
+            assert_eq!(pr_oid, initial_pr_oid, "PR was changed while pushing child");
+
+            let _ = bare
+                .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
+                .map(|_| ())
+                .expect_err("there shouldn't be abrnach for the second commit");
+            assert_eq!(gh.pull_requests.len(), 1, "There should be exactly one PR created from the initial push");
+        }
     }
 
     mod independent_heads {
