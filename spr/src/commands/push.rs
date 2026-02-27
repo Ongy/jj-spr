@@ -8,6 +8,10 @@ use crate::{
 use git2::Oid;
 use std::{io::ErrorKind, iter::zip};
 
+static FORK_CHAR: &str = "┣";
+static CONT_CHAR: &str = "┃";
+static SPACE_CHAR: &str = " ";
+
 #[derive(Debug, clap::Parser, Default)]
 pub struct PushOptions {
     #[clap(long, short = 'm')]
@@ -18,6 +22,9 @@ pub struct PushOptions {
 
     #[clap(long, short = 'a', group = "revs")]
     all: bool,
+
+    #[clap(long, group = "revs")]
+    existing: bool,
 
     #[clap(long, short = 'f')]
     force: bool,
@@ -43,6 +50,11 @@ impl PushOptions {
 
     pub fn with_force(mut self, val: bool) -> Self {
         self.force = val;
+        self
+    }
+
+    pub fn with_existing(mut self, val: bool) -> Self {
+        self.existing = val;
         self
     }
 }
@@ -273,14 +285,21 @@ fn prepare_revision_comment(
         children => {
             let mut child_lines = Vec::new();
             for child in children {
-                let indent = [String::from(" ")]
+                let indent = [String::from(SPACE_CHAR)]
                     .into_iter()
                     .cycle()
                     .take(child.width() * 2 - 1)
                     .reduce(|l, r| format!("{l}{r}"))
-                    .unwrap_or(String::from(" "));
+                    .unwrap_or(String::from(SPACE_CHAR));
                 let new_lines = prepare_revision_comment(child, config);
-                let old_lines = child_lines.into_iter().map(|l| format!("│{}{}", indent, l));
+                let old_lines = child_lines.into_iter().enumerate().map(|(i, l)| {
+                    format!(
+                        "{}{}{}",
+                        if i == 0 { FORK_CHAR } else { CONT_CHAR },
+                        indent,
+                        l
+                    )
+                });
                 child_lines = old_lines.collect();
                 child_lines.extend(new_lines);
             }
@@ -331,15 +350,16 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
-    let heads = opts
-        .revset
-        .as_ref()
-        .map(|s| RevSet::from_arg(s))
-        .unwrap_or(if opts.all {
-            RevSet::mutable().heads()
-        } else {
-            RevSet::current()
-        });
+    let heads = opts.revset.as_ref().map(|s| RevSet::from_arg(s)).unwrap_or(
+        match (opts.all, opts.existing) {
+            (true, false) => RevSet::mutable().heads(),
+            (false, true) => {
+                RevSet::mutable().and(&RevSet::description("substring:\"Last Commit:\""))
+            }
+            (false, false) => RevSet::current(),
+            _ => unreachable!(),
+        },
+    );
     // Get revisions to process
     // The pattern builds:
     // * ::@: Every ancestor of the current revision (including the current reveision)
@@ -1023,6 +1043,62 @@ pub mod tests {
         assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
     }
 
+    mod revset {
+        use crate::testing;
+
+        #[tokio::test]
+        async fn existing() {
+            let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            let pr_branch = bare
+                .find_branch("spr/test/test-commit", git2::BranchType::Local)
+                .expect("Expected to find branch on bare upstream");
+            let initial_pr_oid = pr_branch
+                .get()
+                .target()
+                .expect("Failed to get oid from pr branch");
+
+            let _ = super::create_jujutsu_commit(&mut jj, "Test other commit", "file other");
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default()
+                    .with_existing(true)
+                    .with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            let pr_branch = bare
+                .find_branch("spr/test/test-commit", git2::BranchType::Local)
+                .expect("Expected to find branch on bare upstream");
+            let pr_oid = pr_branch
+                .get()
+                .target()
+                .expect("Failed to get oid from pr branch");
+            assert_eq!(pr_oid, initial_pr_oid, "PR was changed while pushing child");
+
+            let _ = bare
+                .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
+                .map(|_| ())
+                .expect_err("there shouldn't be abrnach for the second commit");
+            assert_eq!(gh.pull_requests.len(), 1, "There should be exactly one PR created from the initial push");
+        }
+    }
+
     mod independent_heads {
         use crate::testing;
 
@@ -1572,8 +1648,76 @@ pub mod tests {
                 str_lines.as_slice(),
                 &[
                     "• [My Title](https://github.com/test_owner/test_repo/pull/1)",
-                    "│ • [My Other Title](https://github.com/test_owner/test_repo/pull/2)",
+                    format!(
+                        "{}{}{}",
+                        super::super::FORK_CHAR,
+                        super::super::SPACE_CHAR,
+                        "• [My Other Title](https://github.com/test_owner/test_repo/pull/2)"
+                    )
+                    .as_ref(),
                     "• [My Third Title](https://github.com/test_owner/test_repo/pull/3)"
+                ],
+                "Lines didn't match: {str_lines:?}",
+            );
+        }
+
+        #[test]
+        fn with_cont() {
+            let mut tree = crate::tree::Tree::new(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(1),
+                title: String::from("My Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            let mut child = crate::tree::Tree::new(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(3),
+                title: String::from("My Third Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            child.add_child_value(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(4),
+                title: String::from("My Fourth Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            tree.add_child(child);
+            tree.add_child_value(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(2),
+                title: String::from("My Other Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            let lines = super::super::prepare_revision_comment(&tree, &testing::config::basic());
+            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
+
+            assert_eq!(
+                str_lines.as_slice(),
+                &[
+                    "• [My Title](https://github.com/test_owner/test_repo/pull/1)",
+                    format!(
+                        "{}{}{}",
+                        super::super::FORK_CHAR,
+                        super::super::SPACE_CHAR,
+                        "• [My Third Title](https://github.com/test_owner/test_repo/pull/3)"
+                    )
+                    .as_ref(),
+                    format!(
+                        "{}{}{}",
+                        super::super::CONT_CHAR,
+                        super::super::SPACE_CHAR,
+                        "• [My Fourth Title](https://github.com/test_owner/test_repo/pull/4)"
+                    )
+                    .as_ref(),
+                    "• [My Other Title](https://github.com/test_owner/test_repo/pull/2)"
                 ],
                 "Lines didn't match: {str_lines:?}",
             );
