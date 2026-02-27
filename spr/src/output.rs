@@ -7,10 +7,13 @@
 
 use crate::{error::Result, jj::PreparedCommit, message::MessageSection};
 
-pub fn output<S: AsRef<str>>(icon: &str, text: S) -> Result<()> {
+pub fn output<S>(icon: &crate::config::icons::Icon, text: S) -> Result<()>
+where
+    S: AsRef<str>,
+{
     let term = console::Term::stdout();
 
-    let bullet = format!("  {}  ", icon);
+    let bullet = format!("  {}  ", icon.as_ref());
     let indent = console::measure_text_width(&bullet);
     let indent_string = " ".repeat(indent);
     let options = textwrap::Options::new((term.size().1 as usize) - indent * 2)

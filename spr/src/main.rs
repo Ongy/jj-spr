@@ -14,7 +14,6 @@ use jj_spr::{
     commands,
     config::{self, get_auth_token},
     error::{Error, Result, ResultExt},
-    output::output,
 };
 use reqwest::{self, header};
 
@@ -144,7 +143,7 @@ pub async fn spr() -> Result<()> {
 async fn main() -> Result<()> {
     if let Err(error) = spr().await {
         for message in error.messages() {
-            output("🛑", message)?;
+            jj_spr::output::output(&jj_spr::config::icons::Icons::default().stop, message)?;
         }
         std::process::exit(1);
     }

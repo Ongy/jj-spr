@@ -2,15 +2,10 @@ use crate::{
     error::{Error, Result, ResultExt},
     jj::RevSet,
     message::{MessageSection, build_github_body},
-    output::output,
     utils::run_command,
 };
 use git2::Oid;
 use std::{io::ErrorKind, iter::zip};
-
-static FORK_CHAR: &str = "┣";
-static CONT_CHAR: &str = "┃";
-static SPACE_CHAR: &str = " ";
 
 #[derive(Debug, clap::Parser, Default)]
 pub struct PushOptions {
@@ -110,7 +105,7 @@ async fn do_push_single<H: AsRef<str>>(
         } else {
             "No update necessary".into()
         };
-        output("✅", message.as_str())?;
+        crate::output::output(&config.icons.ok, message.as_str())?;
         return Ok(());
     }
 
@@ -170,11 +165,14 @@ async fn do_push_single<H: AsRef<str>>(
     jj.update()?;
 
     if let Some(pr) = revision.pull_request_number {
-        if parents.len() == 1 {
-            output("✅", format!("Updated {}", config.pull_request_url(pr)))?;
-        } else {
-            output("✅", format!("Rebased {}", config.pull_request_url(pr)))?;
-        }
+        crate::output::output(
+            &config.icons.ok,
+            if parents.len() == 1 {
+                format!("Updated {}", config.pull_request_url(pr))
+            } else {
+                format!("Rebased {}", config.pull_request_url(pr))
+            },
+        )?;
     };
     Ok(())
 }
@@ -285,17 +283,21 @@ fn prepare_revision_comment(
         children => {
             let mut child_lines = Vec::new();
             for child in children {
-                let indent = [String::from(SPACE_CHAR)]
+                let indent = [config.drawing.space.clone()]
                     .into_iter()
                     .cycle()
                     .take(child.width() * 2 - 1)
                     .reduce(|l, r| format!("{l}{r}"))
-                    .unwrap_or(String::from(SPACE_CHAR));
+                    .unwrap_or(config.drawing.space.clone());
                 let new_lines = prepare_revision_comment(child, config);
                 let old_lines = child_lines.into_iter().enumerate().map(|(i, l)| {
                     format!(
                         "{}{}{}",
-                        if i == 0 { FORK_CHAR } else { CONT_CHAR },
+                        if i == 0 {
+                            &config.drawing.fork
+                        } else {
+                            &config.drawing.cont
+                        },
                         indent,
                         l
                     )
@@ -392,7 +394,10 @@ where
     // At this point it's guaranteed that our commits are single parent and the chain goes up to trunk()
     // We need the trunk's commit's OID. The first pull request (made against upstream trunk) needs it to start the chain.
     if revisions.is_empty() {
-        output("👋", "No commits found - nothing to do. Good bye!")?;
+        crate::output::output(
+            &config.icons.wave,
+            "No commits found - nothing to do. Good bye!",
+        )?;
         return Ok(());
     };
 
@@ -440,8 +445,8 @@ where
 
         let pull_request_url = config.pull_request_url(pr.pr_number());
 
-        output(
-            "✨",
+        crate::output::output(
+            &config.icons.sparkle,
             &format!(
                 "Created new Pull Request #{}: {}",
                 pr.pr_number(),
@@ -483,8 +488,8 @@ where
                     gh.update_pr_comment(number, &content).await?;
                 }
                 None => {
-                    output(
-                        "X",
+                    crate::output::output(
+                        &config.icons.error,
                         format!(
                             "Change {:?} has no PR attached. This is a bug at this point",
                             rev.id
@@ -1095,7 +1100,11 @@ pub mod tests {
                 .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
                 .map(|_| ())
                 .expect_err("there shouldn't be abrnach for the second commit");
-            assert_eq!(gh.pull_requests.len(), 1, "There should be exactly one PR created from the initial push");
+            assert_eq!(
+                gh.pull_requests.len(),
+                1,
+                "There should be exactly one PR created from the initial push"
+            );
         }
     }
 
@@ -1641,7 +1650,8 @@ pub mod tests {
                 message: std::collections::BTreeMap::new(),
                 bookmarks: Vec::new(),
             });
-            let lines = super::super::prepare_revision_comment(&tree, &testing::config::basic());
+            let config = testing::config::basic();
+            let lines = super::super::prepare_revision_comment(&tree, &config);
             let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
 
             assert_eq!(
@@ -1650,8 +1660,8 @@ pub mod tests {
                     "• [My Title](https://github.com/test_owner/test_repo/pull/1)",
                     format!(
                         "{}{}{}",
-                        super::super::FORK_CHAR,
-                        super::super::SPACE_CHAR,
+                        config.drawing.fork,
+                        config.drawing.space,
                         "• [My Other Title](https://github.com/test_owner/test_repo/pull/2)"
                     )
                     .as_ref(),
@@ -1696,7 +1706,8 @@ pub mod tests {
                 message: std::collections::BTreeMap::new(),
                 bookmarks: Vec::new(),
             });
-            let lines = super::super::prepare_revision_comment(&tree, &testing::config::basic());
+            let config = testing::config::basic();
+            let lines = super::super::prepare_revision_comment(&tree, &config);
             let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
 
             assert_eq!(
@@ -1705,15 +1716,15 @@ pub mod tests {
                     "• [My Title](https://github.com/test_owner/test_repo/pull/1)",
                     format!(
                         "{}{}{}",
-                        super::super::FORK_CHAR,
-                        super::super::SPACE_CHAR,
+                        config.drawing.fork,
+                        config.drawing.space,
                         "• [My Third Title](https://github.com/test_owner/test_repo/pull/3)"
                     )
                     .as_ref(),
                     format!(
                         "{}{}{}",
-                        super::super::CONT_CHAR,
-                        super::super::SPACE_CHAR,
+                        config.drawing.cont,
+                        config.drawing.space,
                         "• [My Fourth Title](https://github.com/test_owner/test_repo/pull/4)"
                     )
                     .as_ref(),
