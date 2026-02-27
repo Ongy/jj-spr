@@ -8,6 +8,10 @@ use crate::{
 use git2::Oid;
 use std::{io::ErrorKind, iter::zip};
 
+static FORK_CHAR: &str = "┣";
+static CONT_CHAR: &str = "┃";
+static SPACE_CHAR: &str = " ";
+
 #[derive(Debug, clap::Parser, Default)]
 pub struct PushOptions {
     #[clap(long, short = 'm')]
@@ -273,14 +277,21 @@ fn prepare_revision_comment(
         children => {
             let mut child_lines = Vec::new();
             for child in children {
-                let indent = [String::from(" ")]
+                let indent = [String::from(SPACE_CHAR)]
                     .into_iter()
                     .cycle()
                     .take(child.width() * 2 - 1)
                     .reduce(|l, r| format!("{l}{r}"))
-                    .unwrap_or(String::from(" "));
+                    .unwrap_or(String::from(SPACE_CHAR));
                 let new_lines = prepare_revision_comment(child, config);
-                let old_lines = child_lines.into_iter().map(|l| format!("│{}{}", indent, l));
+                let old_lines = child_lines.into_iter().enumerate().map(|(i, l)| {
+                    format!(
+                        "{}{}{}",
+                        if i == 0 { FORK_CHAR } else { CONT_CHAR },
+                        indent,
+                        l
+                    )
+                });
                 child_lines = old_lines.collect();
                 child_lines.extend(new_lines);
             }
@@ -1572,8 +1583,76 @@ pub mod tests {
                 str_lines.as_slice(),
                 &[
                     "• [My Title](https://github.com/test_owner/test_repo/pull/1)",
-                    "│ • [My Other Title](https://github.com/test_owner/test_repo/pull/2)",
+                    format!(
+                        "{}{}{}",
+                        super::super::FORK_CHAR,
+                        super::super::SPACE_CHAR,
+                        "• [My Other Title](https://github.com/test_owner/test_repo/pull/2)"
+                    )
+                    .as_ref(),
                     "• [My Third Title](https://github.com/test_owner/test_repo/pull/3)"
+                ],
+                "Lines didn't match: {str_lines:?}",
+            );
+        }
+
+        #[test]
+        fn with_cont() {
+            let mut tree = crate::tree::Tree::new(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(1),
+                title: String::from("My Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            let mut child = crate::tree::Tree::new(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(3),
+                title: String::from("My Third Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            child.add_child_value(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(4),
+                title: String::from("My Fourth Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            tree.add_child(child);
+            tree.add_child_value(crate::jj::Revision {
+                id: crate::jj::ChangeId::from("change"),
+                parent_ids: Vec::new(),
+                pull_request_number: Some(2),
+                title: String::from("My Other Title"),
+                message: std::collections::BTreeMap::new(),
+                bookmarks: Vec::new(),
+            });
+            let lines = super::super::prepare_revision_comment(&tree, &testing::config::basic());
+            let str_lines: Vec<_> = lines.iter().map(|s| s.as_str()).collect();
+
+            assert_eq!(
+                str_lines.as_slice(),
+                &[
+                    "• [My Title](https://github.com/test_owner/test_repo/pull/1)",
+                    format!(
+                        "{}{}{}",
+                        super::super::FORK_CHAR,
+                        super::super::SPACE_CHAR,
+                        "• [My Third Title](https://github.com/test_owner/test_repo/pull/3)"
+                    )
+                    .as_ref(),
+                    format!(
+                        "{}{}{}",
+                        super::super::CONT_CHAR,
+                        super::super::SPACE_CHAR,
+                        "• [My Fourth Title](https://github.com/test_owner/test_repo/pull/4)"
+                    )
+                    .as_ref(),
+                    "• [My Other Title](https://github.com/test_owner/test_repo/pull/2)"
                 ],
                 "Lines didn't match: {str_lines:?}",
             );
