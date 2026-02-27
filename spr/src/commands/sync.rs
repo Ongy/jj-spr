@@ -3,7 +3,6 @@ use std::iter::zip;
 use crate::{
     error::Result,
     jj::{ChangeId, RevSet},
-    output::output,
 };
 
 #[derive(Debug, clap::Parser)]
@@ -57,8 +56,8 @@ where
 
         // TODO: Should this only abandon changes of PRs that have been merged?
         if pr.closed() {
-            output(
-                "🛬",
+            crate::output::output(
+                crate::output::Icons::Land,
                 format!(
                     "{} landed. Abandoning {:?}",
                     config.pull_request_url(pr.pr_number()),
@@ -69,17 +68,16 @@ where
         }
     }
     if jj.revset_to_change_ids(&revset)?.is_empty() {
-        output("👋", "Nothing left to rebase")?;
+        crate::output::output(crate::output::Icons::Wave, "Nothing left to rebase")?;
         return Ok(());
     }
-    output("🔁", format!("Going to rebase {:?}", revset))?;
+    crate::output::output(
+        crate::output::Icons::Refresh,
+        format!("Going to rebase {:?}", revset),
+    )?;
     jj.rebase_branch(
         &revset,
-        ChangeId::from(format!(
-            "{}@{}",
-            config.master_ref,
-            config.remote_name
-        )),
+        ChangeId::from(format!("{}@{}", config.master_ref, config.remote_name)),
     )?;
 
     Ok(())

@@ -7,7 +7,6 @@
 
 use crate::{
     error::{Error, Result},
-    output::output,
 };
 
 pub type MessageSectionsMap = std::collections::BTreeMap<MessageSection, String>;
@@ -187,7 +186,10 @@ pub fn validate_commit_message(message: &MessageSectionsMap) -> Result<()> {
         Some(title) => title.is_empty(),
     };
     if title_missing_or_empty {
-        output("💔", "Commit message does not have a title!")?;
+        crate::output::output(
+            crate::output::Icons::Error,
+            "Commit message does not have a title!",
+        )?;
         return Err(Error::empty());
     }
 

@@ -9,7 +9,6 @@ use crate::{
     error::{Error, Result},
     jj::RevSet,
     message::{MessageSection, validate_commit_message},
-    output::output,
 };
 
 #[derive(Debug, clap::Parser, Default)]
@@ -157,7 +156,10 @@ where
     )?;
 
     if revisions.is_empty() {
-        output("👋", "No commits found - nothing to do. Good bye!")?;
+        crate::output::output(
+            crate::output::Icons::Wave,
+            "No commits found - nothing to do. Good bye!",
+        )?;
         return Ok(());
     }
 

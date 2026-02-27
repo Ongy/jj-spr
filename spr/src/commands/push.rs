@@ -2,7 +2,6 @@ use crate::{
     error::{Error, Result, ResultExt},
     jj::RevSet,
     message::{MessageSection, build_github_body},
-    output::output,
     utils::run_command,
 };
 use git2::Oid;
@@ -106,7 +105,7 @@ async fn do_push_single<H: AsRef<str>>(
         } else {
             "No update necessary".into()
         };
-        output("✅", message.as_str())?;
+        crate::output::output(crate::output::Icons::OK, message.as_str())?;
         return Ok(());
     }
 
@@ -166,11 +165,14 @@ async fn do_push_single<H: AsRef<str>>(
     jj.update()?;
 
     if let Some(pr) = revision.pull_request_number {
-        if parents.len() == 1 {
-            output("✅", format!("Updated {}", config.pull_request_url(pr)))?;
-        } else {
-            output("✅", format!("Rebased {}", config.pull_request_url(pr)))?;
-        }
+        crate::output::output(
+            crate::output::Icons::OK,
+            if parents.len() == 1 {
+                format!("Updated {}", config.pull_request_url(pr))
+            } else {
+                format!("Rebased {}", config.pull_request_url(pr))
+            },
+        )?;
     };
     Ok(())
 }
@@ -392,7 +394,10 @@ where
     // At this point it's guaranteed that our commits are single parent and the chain goes up to trunk()
     // We need the trunk's commit's OID. The first pull request (made against upstream trunk) needs it to start the chain.
     if revisions.is_empty() {
-        output("👋", "No commits found - nothing to do. Good bye!")?;
+        crate::output::output(
+            crate::output::Icons::Wave,
+            "No commits found - nothing to do. Good bye!",
+        )?;
         return Ok(());
     };
 
@@ -440,8 +445,8 @@ where
 
         let pull_request_url = config.pull_request_url(pr.pr_number());
 
-        output(
-            "✨",
+        crate::output::output(
+            crate::output::Icons::Sparkle,
             &format!(
                 "Created new Pull Request #{}: {}",
                 pr.pr_number(),
@@ -483,8 +488,8 @@ where
                     gh.update_pr_comment(number, &content).await?;
                 }
                 None => {
-                    output(
-                        "X",
+                    crate::output::output(
+                        crate::output::Icons::Error,
                         format!(
                             "Change {:?} has no PR attached. This is a bug at this point",
                             rev.id
@@ -1095,7 +1100,11 @@ pub mod tests {
                 .find_branch("spr/test/test-other-commit", git2::BranchType::Local)
                 .map(|_| ())
                 .expect_err("there shouldn't be abrnach for the second commit");
-            assert_eq!(gh.pull_requests.len(), 1, "There should be exactly one PR created from the initial push");
+            assert_eq!(
+                gh.pull_requests.len(),
+                1,
+                "There should be exactly one PR created from the initial push"
+            );
         }
     }
 
