@@ -120,7 +120,7 @@ fn do_fetch<
                 .insert(MessageSection::Summary, pull_request.body().into());
         }
 
-        failure = validate_commit_message(&revision.message).is_err() || failure;
+        failure = validate_commit_message(config, &revision.message).is_err() || failure;
     }
     for (rev, _) in items.into_iter() {
         jj.update_revision_message(&rev)?;
@@ -157,7 +157,7 @@ where
 
     if revisions.is_empty() {
         crate::output::output(
-            crate::output::Icons::Wave,
+            &config.icons.wave,
             "No commits found - nothing to do. Good bye!",
         )?;
         return Ok(());

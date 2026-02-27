@@ -57,7 +57,7 @@ where
         // TODO: Should this only abandon changes of PRs that have been merged?
         if pr.closed() {
             crate::output::output(
-                crate::output::Icons::Land,
+                &config.icons.land,
                 format!(
                     "{} landed. Abandoning {:?}",
                     config.pull_request_url(pr.pr_number()),
@@ -68,11 +68,11 @@ where
         }
     }
     if jj.revset_to_change_ids(&revset)?.is_empty() {
-        crate::output::output(crate::output::Icons::Wave, "Nothing left to rebase")?;
+        crate::output::output(&config.icons.wave, "Nothing left to rebase")?;
         return Ok(());
     }
     crate::output::output(
-        crate::output::Icons::Refresh,
+        &config.icons.refresh,
         format!("Going to rebase {:?}", revset),
     )?;
     jj.rebase_branch(

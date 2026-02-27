@@ -143,7 +143,7 @@ pub async fn spr() -> Result<()> {
 async fn main() -> Result<()> {
     if let Err(error) = spr().await {
         for message in error.messages() {
-            jj_spr::output::output(jj_spr::output::Icons::Stop, message)?;
+            jj_spr::output::output(&jj_spr::config::icons::Icons::default().stop, message)?;
         }
         std::process::exit(1);
     }
