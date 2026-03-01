@@ -54,10 +54,32 @@ impl PushOptions {
     }
 }
 
+enum WorkEvent {
+    Rebased,
+    Updated,
+    PRCreated,
+    ReviewRequested,
+    Assigned,
+}
+
+type WorkLog = Vec<WorkEvent>;
+impl std::fmt::Display for WorkEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            WorkEvent::Rebased => "Rebased",
+            WorkEvent::Updated => "Updated",
+            WorkEvent::PRCreated => "Create Pull Request",
+            WorkEvent::ReviewRequested => "Requested Reviews",
+            WorkEvent::Assigned => "Assigned users",
+        })
+    }
+}
+
 struct WorkSet<PR> {
     revision: crate::jj::Revision,
     progress_bar: indicatif::ProgressBar,
     pull_request: PR,
+    work_done: WorkLog,
 }
 
 impl<PR> WorkSet<PR> {
@@ -69,20 +91,29 @@ impl<PR> WorkSet<PR> {
             revision: self.revision,
             progress_bar: self.progress_bar,
             pull_request: fun(self.pull_request),
+            work_done: self.work_done,
         }
+    }
+
+    fn format_worklog(&self) -> String {
+        if self.work_done.is_empty() {
+            return String::from("Nothing to be done.");
+        }
+
+        let stringified: Vec<_> = self.work_done.iter().map(|e| format!("{}", e)).collect();
+        stringified.join("&")
     }
 }
 
-async fn do_push_single<H: AsRef<str>>(
+async fn do_push_single<PR, H: AsRef<str>>(
     jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
     opts: &PushOptions,
-    revision: &mut crate::jj::Revision,
     base_ref: &crate::jj::RevSet,
     head_branch: H,
-    progress: indicatif::ProgressBar,
+    ws: &mut WorkSet<PR>,
 ) -> Result<()> {
-    progress.set_message("Building new commit");
+    ws.progress_bar.set_message("Building new commit");
     let base_oid = jj
         .resolve_revision_to_commit_id(base_ref.as_ref())
         .context(String::from("Resolve base_ref to OID"))?;
@@ -100,7 +131,7 @@ async fn do_push_single<H: AsRef<str>>(
     })?;
 
     let target_oid = jj
-        .resolve_revision_to_commit_id(revision.id.as_ref())
+        .resolve_revision_to_commit_id(ws.revision.id.as_ref())
         .map_err(|mut err| {
             err.push("resolve revision".into());
             err
@@ -121,29 +152,29 @@ async fn do_push_single<H: AsRef<str>>(
     };
 
     if target_tree == head_tree && base_base == base_oid {
-        progress.finish_with_message("Git is already up to date");
+        ws.progress_bar.set_message("Git is already up to date");
         return Ok(());
     }
 
     if !opts.force
-        && let Some(old) = revision.message.get(&MessageSection::LastCommit)
+        && let Some(old) = ws.revision.message.get(&MessageSection::LastCommit)
         && git2::Oid::from_str(old)? != head_oid
     {
         return Err(crate::error::Error::new(format!(
             "Cannot update {}. It has an unexpected upstream.",
-            config.pull_request_url(revision.pull_request_number.unwrap_or(0))
+            config.pull_request_url(ws.revision.pull_request_number.unwrap_or(0))
         )));
     }
 
     let message = if head_oid == base_oid
-        && let Some(title) = revision.message.get(&MessageSection::Title)
+        && let Some(title) = ws.revision.message.get(&MessageSection::Title)
     {
-        format!("{}\n\n{}", title, build_github_body(&revision.message))
+        format!("{}\n\n{}", title, build_github_body(&ws.revision.message))
     } else if let Some(ref msg) = opts.message {
         msg.clone()
     } else {
         dialoguer::Input::<String>::new()
-            .with_prompt(format!("Message for '{}'", revision.title))
+            .with_prompt(format!("Message for '{}'", ws.revision.title))
             .with_initial_text("")
             .allow_empty(true)
             .interact_text()?
@@ -162,8 +193,8 @@ async fn do_push_single<H: AsRef<str>>(
             err
         })?;
 
-    progress.set_message("Pushing to GitHub");
-    revision
+    ws.progress_bar.set_message("Pushing to GitHub");
+    ws.revision
         .message
         .insert(MessageSection::LastCommit, pr_commit.clone().to_string());
     let mut cmd = tokio::process::Command::new("git");
@@ -181,11 +212,17 @@ async fn do_push_single<H: AsRef<str>>(
         .reword("git push failed".to_string())?;
     jj.update()?;
 
-    progress.set_message(if parents.len() == 1 {
+    ws.progress_bar.set_message(if parents.len() == 1 {
         format!("Updated")
     } else {
         format!("Rebased")
     });
+    ws.work_done.push(if parents.len() == 1 {
+        WorkEvent::Updated
+    } else {
+        WorkEvent::Rebased
+    });
+
     Ok(())
 }
 
@@ -227,12 +264,12 @@ where
             config.get_new_branch_name(&jj.get_all_ref_names()?, title)
         };
         let base_branch = if let Some(ref pr) = ws.pull_request {
-            Some(pr.base_branch_name())
+            Some(pr.base_branch_name().to_string())
         } else if let Some(ba) = seen
             .iter()
             .find(|ba| ba.revision.id == ws.revision.parent_ids[0])
         {
-            Some(ba.pull_request.head_branch.as_str())
+            Some(ba.pull_request.head_branch.clone())
         } else {
             None
         };
@@ -249,22 +286,14 @@ where
             trunk_head.fork_point(&crate::jj::RevSet::from(&ws.revision.id))
         };
 
-        do_push_single(
-            jj,
-            config,
-            opts,
-            &mut ws.revision,
-            &base_ref,
-            &head_ref,
-            ws.progress_bar.clone(),
-        )
-        .await
-        .map_err(|mut err| {
-            err.push("do_stacked".into());
-            err
-        })?;
+        do_push_single(jj, config, opts, &base_ref, &head_ref, &mut ws)
+            .await
+            .map_err(|mut err| {
+                err.push("do_push_single".into());
+                err
+            })?;
 
-        let owned_base = base_branch.unwrap_or(config.master_ref.as_ref()).into();
+        let owned_base = base_branch.unwrap_or(config.master_ref.clone()).into();
         seen.push(ws.map(|pr| BranchAction {
             head_branch: head_ref,
             base_branch: owned_base,
@@ -452,6 +481,7 @@ where
                 revision,
                 progress_bar,
                 pull_request: (),
+                work_done: Vec::new(),
             }
         })
         .collect();
@@ -517,6 +547,7 @@ where
             )
             .await?;
 
+        workset.work_done.push(WorkEvent::PRCreated);
         workset
             .progress_bar
             .set_prefix(format!("{} ({})", workset.revision.title, pr.pr_number()));
@@ -524,11 +555,13 @@ where
             workset.progress_bar.set_message("Requesting reviewers");
             gh.add_reviewers(&pr, reviewers.split(",").map(|s| s.trim()))
                 .await?;
+            workset.work_done.push(WorkEvent::ReviewRequested);
         }
         if let Some(assignees) = workset.revision.message.get(&MessageSection::Assignees) {
             workset.progress_bar.set_message("Requesting assignees");
             gh.add_assignees(&pr, assignees.split(",").map(|s| s.trim()))
                 .await?;
+            workset.work_done.push(WorkEvent::Assigned);
         }
 
         let pull_request_url = config.pull_request_url(pr.pr_number());
@@ -554,7 +587,7 @@ where
         workset.progress_bar.set_message("Created PR");
     }
     for ws in actions.iter() {
-        ws.progress_bar.finish_with_message("Done");
+        ws.progress_bar.finish_with_message(ws.format_worklog());
     }
     setup.set_message("Figuring out PR tree");
 
