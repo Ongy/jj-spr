@@ -471,7 +471,7 @@ where
             let progress_bar = multi.add(
                 indicatif::ProgressBar::new(100).with_style(
                     indicatif::ProgressStyle::default_bar()
-                        .template("{prefix} {msg}")
+                        .template("{prefix}: {msg}")
                         .expect("Indicatif template shouldn't fail"),
                 ),
             );
