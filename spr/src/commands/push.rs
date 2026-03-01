@@ -550,7 +550,7 @@ where
         workset.work_done.push(WorkEvent::PRCreated);
         workset
             .progress_bar
-            .set_prefix(format!("{} ({})", workset.revision.title, pr.pr_number()));
+            .set_prefix(format!("{} ({})", workset.revision.title, config.pull_request_url(pr.pr_number())));
         if let Some(reviewers) = workset.revision.message.get(&MessageSection::Reviewers) {
             workset.progress_bar.set_message("Requesting reviewers");
             gh.add_reviewers(&pr, reviewers.split(",").map(|s| s.trim()))
