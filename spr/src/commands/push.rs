@@ -54,6 +54,25 @@ impl PushOptions {
     }
 }
 
+struct WorkSet<PR> {
+    revision: crate::jj::Revision,
+    progress_bar: indicatif::ProgressBar,
+    pull_request: PR,
+}
+
+impl<PR> WorkSet<PR> {
+    fn map<F, O>(self, fun: F) -> WorkSet<O>
+    where
+        F: FnOnce(PR) -> O,
+    {
+        WorkSet {
+            revision: self.revision,
+            progress_bar: self.progress_bar,
+            pull_request: fun(self.pull_request),
+        }
+    }
+}
+
 async fn do_push_single<H: AsRef<str>>(
     jj: &mut crate::jj::Jujutsu,
     config: &crate::config::Config,
@@ -61,7 +80,9 @@ async fn do_push_single<H: AsRef<str>>(
     revision: &mut crate::jj::Revision,
     base_ref: &crate::jj::RevSet,
     head_branch: H,
+    progress: indicatif::ProgressBar,
 ) -> Result<()> {
+    progress.set_message("Building new commit");
     let base_oid = jj
         .resolve_revision_to_commit_id(base_ref.as_ref())
         .context(String::from("Resolve base_ref to OID"))?;
@@ -100,12 +121,7 @@ async fn do_push_single<H: AsRef<str>>(
     };
 
     if target_tree == head_tree && base_base == base_oid {
-        let message = if let Some(pr) = revision.pull_request_number {
-            format!("No update necessary for #{}", config.pull_request_url(pr))
-        } else {
-            "No update necessary".into()
-        };
-        crate::output::output(&config.icons.ok, message.as_str())?;
+        progress.finish_with_message("Git is already up to date");
         return Ok(());
     }
 
@@ -146,6 +162,7 @@ async fn do_push_single<H: AsRef<str>>(
             err
         })?;
 
+    progress.set_message("Pushing to GitHub");
     revision
         .message
         .insert(MessageSection::LastCommit, pr_commit.clone().to_string());
@@ -164,22 +181,16 @@ async fn do_push_single<H: AsRef<str>>(
         .reword("git push failed".to_string())?;
     jj.update()?;
 
-    if let Some(pr) = revision.pull_request_number {
-        crate::output::output(
-            &config.icons.ok,
-            if parents.len() == 1 {
-                format!("Updated {}", config.pull_request_url(pr))
-            } else {
-                format!("Rebased {}", config.pull_request_url(pr))
-            },
-        )?;
-    };
+    progress.set_message(if parents.len() == 1 {
+        format!("Updated")
+    } else {
+        format!("Rebased")
+    });
     Ok(())
 }
 
 #[derive(Debug, Clone)]
 struct BranchAction {
-    revision: crate::jj::Revision,
     head_branch: String,
     base_branch: String,
     existing_nr: Option<u64>,
@@ -189,36 +200,39 @@ async fn do_push<I, PR>(
     config: &crate::config::Config,
     jj: &mut crate::jj::Jujutsu,
     opts: &PushOptions,
-    revisions: I,
+    work: I,
     trunk_head: &crate::jj::RevSet,
-) -> Result<Vec<BranchAction>>
+) -> Result<Vec<WorkSet<BranchAction>>>
 where
     PR: crate::github::GHPullRequest,
-    I: IntoIterator<Item = (crate::jj::Revision, Option<PR>)>,
+    I: IntoIterator<Item = WorkSet<Option<PR>>>,
 {
     // ChangeID, head branch, base branch, existing pr
-    let mut seen: Vec<BranchAction> = Vec::new();
-    for (mut revision, maybe_pr) in revisions.into_iter() {
-        let head_ref: String = if let Some(ref pr) = maybe_pr {
+    let mut seen: Vec<WorkSet<BranchAction>> = Vec::new();
+    for mut ws in work.into_iter() {
+        ws.progress_bar.set_message("Finding base commits");
+
+        let head_ref: String = if let Some(ref pr) = ws.pull_request {
             pr.head_branch_name().into()
-        } else if let Some(bookmark) = revision.bookmarks.first() {
+        } else if let Some(bookmark) = ws.revision.bookmarks.first() {
             bookmark.clone()
         } else {
             // We have to come up with something...
-            let title = revision
+            let title = ws
+                .revision
                 .message
                 .get(&MessageSection::Title)
                 .map(|t| &t[..])
                 .unwrap_or("");
             config.get_new_branch_name(&jj.get_all_ref_names()?, title)
         };
-        let base_branch = if let Some(ref pr) = maybe_pr {
+        let base_branch = if let Some(ref pr) = ws.pull_request {
             Some(pr.base_branch_name())
         } else if let Some(ba) = seen
             .iter()
-            .find(|ba| ba.revision.id == revision.parent_ids[0])
+            .find(|ba| ba.revision.id == ws.revision.parent_ids[0])
         {
-            Some(ba.head_branch.as_str())
+            Some(ba.pull_request.head_branch.as_str())
         } else {
             None
         };
@@ -232,22 +246,30 @@ where
             )?;
             RevSet::from_remote_branch(&branch, &config.remote_name)?
         } else {
-            trunk_head.fork_point(&crate::jj::RevSet::from(&revision.id))
+            trunk_head.fork_point(&crate::jj::RevSet::from(&ws.revision.id))
         };
 
-        do_push_single(jj, config, opts, &mut revision, &base_ref, &head_ref)
-            .await
-            .map_err(|mut err| {
-                err.push("do_stacked".into());
-                err
-            })?;
+        do_push_single(
+            jj,
+            config,
+            opts,
+            &mut ws.revision,
+            &base_ref,
+            &head_ref,
+            ws.progress_bar.clone(),
+        )
+        .await
+        .map_err(|mut err| {
+            err.push("do_stacked".into());
+            err
+        })?;
 
-        seen.push(BranchAction {
-            revision,
+        let owned_base = base_branch.unwrap_or(config.master_ref.as_ref()).into();
+        seen.push(ws.map(|pr| BranchAction {
             head_branch: head_ref,
-            base_branch: base_branch.unwrap_or(config.master_ref.as_ref()).into(),
-            existing_nr: maybe_pr.map(|pr| pr.pr_number()),
-        });
+            base_branch: owned_base,
+            existing_nr: pr.map(|pr| pr.pr_number()),
+        }));
     }
     Ok(seen)
 }
@@ -352,6 +374,14 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
+    let multi = indicatif::MultiProgress::new();
+    let setup = multi.add(
+        indicatif::ProgressBar::new(100).with_style(
+            indicatif::ProgressStyle::default_bar()
+                .template("{msg}")
+                .expect("Indicatif template shouldn't fail"),
+        ),
+    );
     let heads = opts.revset.as_ref().map(|s| RevSet::from_arg(s)).unwrap_or(
         match (opts.all, opts.existing) {
             (true, false) => RevSet::mutable().heads(),
@@ -362,6 +392,8 @@ where
             _ => unreachable!(),
         },
     );
+    setup.set_message(format!("Finding revisions for '{}'", heads.as_ref()));
+
     // Get revisions to process
     // The pattern builds:
     // * ::@: Every ancestor of the current revision (including the current reveision)
@@ -377,6 +409,7 @@ where
         .without(&RevSet::immutable().or(&RevSet::description("exact:\"\"")));
     let revisions = jj.read_revision_range(config, &revset)?;
 
+    setup.set_message(format!("Validating revisions are ready"));
     let blockers = jj.revset_to_change_ids(
         &revset.and(
             &RevSet::conflicts()
@@ -394,6 +427,7 @@ where
     // At this point it's guaranteed that our commits are single parent and the chain goes up to trunk()
     // We need the trunk's commit's OID. The first pull request (made against upstream trunk) needs it to start the chain.
     if revisions.is_empty() {
+        setup.finish_and_clear();
         crate::output::output(
             &config.icons.wave,
             "No commits found - nothing to do. Good bye!",
@@ -401,8 +435,29 @@ where
         return Ok(());
     };
 
+    setup.set_message("Finding pull requests for revisions");
+    let workset: Vec<WorkSet<()>> = revisions
+        .into_iter()
+        .map(|revision| {
+            let progress_bar = multi.add(
+                indicatif::ProgressBar::new(100).with_style(
+                    indicatif::ProgressStyle::default_bar()
+                        .template("{prefix}: {msg}")
+                        .expect("Indicatif template shouldn't fail"),
+                ),
+            );
+            progress_bar.set_prefix(format!("{}", revision.title));
+            progress_bar.set_message("Figuring it out");
+            WorkSet {
+                revision,
+                progress_bar,
+                pull_request: (),
+            }
+        })
+        .collect();
+
     let pull_requests = gh
-        .pull_requests(revisions.iter().map(|r| r.pull_request_number))
+        .pull_requests(workset.iter().map(|ws| ws.revision.pull_request_number))
         .await?;
 
     let trunk = {
@@ -412,39 +467,71 @@ where
         )?;
         crate::jj::RevSet::from_remote_branch(&branch, &config.remote_name)?
     };
-    let mut actions = do_push(config, jj, &opts, zip(revisions, pull_requests), &trunk).await?;
-    for action in actions.iter_mut().into_iter() {
+    let work = zip(workset, pull_requests).into_iter().map(|(ws, pr)| {
+        if let Some(ref pr) = pr {
+            ws.progress_bar.set_prefix(format!(
+                "{} ({})",
+                ws.revision.title,
+                config.pull_request_url(pr.pr_number())
+            ));
+        }
+        ws.progress_bar.set_message("Figured out PRs");
+        ws.map(|_| pr)
+    });
+
+    setup.set_message("Pushing revisions");
+    let mut actions = do_push(config, jj, &opts, work, &trunk).await?;
+    setup.set_message("Setting up PRs");
+    for workset in actions.iter_mut().into_iter() {
         // We don't know what to do with these yet...
-        if let Some(_) = action.existing_nr {
+        if let Some(_) = workset.pull_request.existing_nr {
+            workset
+                .progress_bar
+                .set_message("Updating revision description");
             // This will at least write the current commit message.
-            jj.update_revision_message(&action.revision)?;
+            jj.update_revision_message(&workset.revision)?;
+            workset
+                .progress_bar
+                .set_message("Updated revision description");
             continue;
         }
 
-        let title = action
+        workset.progress_bar.set_message("Create Pull Request");
+        let title = workset
             .revision
             .message
             .get(&MessageSection::Title)
             .map_or("Missing Title", |s| s.as_str());
-        let body = action
+        let body = workset
             .revision
             .message
             .get(&MessageSection::Summary)
             .map_or("", |s| s.as_str());
         let pr = gh
-            .new_pull_request(title, body, &action.base_branch, &action.head_branch, false)
+            .new_pull_request(
+                title,
+                body,
+                &workset.pull_request.base_branch,
+                &workset.pull_request.head_branch,
+                false,
+            )
             .await?;
-        if let Some(reviewers) = action.revision.message.get(&MessageSection::Reviewers) {
+
+        workset
+            .progress_bar
+            .set_prefix(format!("{} ({})", workset.revision.title, config.pull_request_url(pr.pr_number())));
+        if let Some(reviewers) = workset.revision.message.get(&MessageSection::Reviewers) {
+            workset.progress_bar.set_message("Requesting reviewers");
             gh.add_reviewers(&pr, reviewers.split(",").map(|s| s.trim()))
                 .await?;
         }
-        if let Some(assignees) = action.revision.message.get(&MessageSection::Assignees) {
+        if let Some(assignees) = workset.revision.message.get(&MessageSection::Assignees) {
+            workset.progress_bar.set_message("Requesting assignees");
             gh.add_assignees(&pr, assignees.split(",").map(|s| s.trim()))
                 .await?;
         }
 
         let pull_request_url = config.pull_request_url(pr.pr_number());
-
         crate::output::output(
             &config.icons.sparkle,
             &format!(
@@ -454,14 +541,22 @@ where
             ),
         )?;
 
-        action
+        workset
+            .progress_bar
+            .set_message("Updating revisions description");
+        workset
             .revision
             .message
             .insert(MessageSection::PullRequest, pull_request_url);
-        action.revision.pull_request_number = Some(pr.pr_number());
+        workset.revision.pull_request_number = Some(pr.pr_number());
 
-        jj.update_revision_message(&action.revision)?;
+        jj.update_revision_message(&workset.revision)?;
+        workset.progress_bar.set_message("Created PR");
     }
+    for ws in actions.iter() {
+        ws.progress_bar.finish_with_message("Done");
+    }
+    setup.set_message("Figuring out PR tree");
 
     let mut forest: crate::tree::Forest<crate::jj::Revision> = crate::tree::Forest::new();
     for ba in actions {
@@ -479,6 +574,7 @@ where
         forest.insert_below(&|p: &crate::jj::Revision| p.id == parent, ba.revision);
     }
 
+    setup.set_message("Updating tree overviews");
     for tree in forest.into_trees() {
         let prepared = prepare_revision_comment(&tree, config);
         for rev in tree.into_iter() {
@@ -499,6 +595,7 @@ where
             }
         }
     }
+    setup.finish_and_clear();
 
     Ok(())
 }
