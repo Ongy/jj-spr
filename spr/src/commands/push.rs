@@ -134,17 +134,17 @@ async fn do_push_single<H: AsRef<str>>(
     };
 
     // Create the new commit
-    let pr_commit = jj
+    let change = jj
         .create_derived_commit(
             target_oid,
             &format!("{}\n\nCreated using jj-spr", message),
-            target_tree,
             parents,
         )
         .map_err(|mut err| {
             err.push("derive commit".into());
             err
         })?;
+    let pr_commit = jj.resolve_revision_to_commit_id(RevSet::from(&change).as_ref())?;
 
     revision
         .message
@@ -162,6 +162,8 @@ async fn do_push_single<H: AsRef<str>>(
     run_command(&mut cmd)
         .await
         .reword("git push failed".to_string())?;
+    // Looks like the above activity makes the change immutable.
+    // So we don't have to (and cannot) abandon it here.
     jj.update()?;
 
     if let Some(pr) = revision.pull_request_number {

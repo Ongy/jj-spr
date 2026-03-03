@@ -62,7 +62,7 @@ pub struct Jujutsu {
     pub git_repo: git2::Repository,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RevSet(String);
 
 impl RevSet {
@@ -373,38 +373,39 @@ impl Jujutsu {
     }
 
     pub fn create_derived_commit(
-        &self,
+        &mut self,
         original_commit_oid: Oid,
         message: &str,
-        tree_oid: Oid,
         parent_oids: &[Oid],
-    ) -> Result<Oid> {
-        let original_commit = self.git_repo.find_commit(original_commit_oid)?;
-        let tree = self.git_repo.find_tree(tree_oid)?;
+    ) -> Result<ChangeId> {
+        let original_commit = RevSet::from(&self.git_repo.find_commit(original_commit_oid)?);
 
-        let mut parents = Vec::new();
-        for &oid in parent_oids {
-            parents.push(self.git_repo.find_commit(oid)?);
-        }
-        let parent_refs: Vec<_> = parents.iter().collect();
+        let parent_revset = parent_oids
+            .into_iter()
+            .try_fold(None as Option<RevSet>, |l, r| {
+                let r = RevSet::from(
+                    &self
+                        .git_repo
+                        .find_commit(r.clone())
+                        .context(format!("get commit for {r}"))?,
+                );
+                Ok(Some(if let Some(l) = l { l.or(&r) } else { r })) as crate::error::Result<_>
+            })
+            .context(String::from("Build parents revset to derive onto"))?;
+        self.new_revision(parent_revset, Some(message), true)
+            .context(String::from("Create new for derived commit"))?;
 
-        // Take the user/email from the existing commit but make a new signature which has a
-        // timestamp of now.
-        let committer = git2::Signature::now(
-            String::from_utf8_lossy(original_commit.committer().name_bytes()).as_ref(),
-            String::from_utf8_lossy(original_commit.committer().email_bytes()).as_ref(),
-        )?;
+        let change = self
+            .revset_to_change_id(&RevSet::from_arg("at_operation(@-, ..).."))
+            .context(String::from("Read change_id from last operation"))?;
 
-        // The author signature should reference the same user as the original commit, but we set
-        // the timestamp to now, so this commit shows up in GitHub's timeline in the right place.
-        let author = git2::Signature::now(
-            String::from_utf8_lossy(original_commit.author().name_bytes()).as_ref(),
-            String::from_utf8_lossy(original_commit.author().email_bytes()).as_ref(),
-        )?;
-
-        Ok(self
-            .git_repo
-            .commit(None, &author, &committer, message, &tree, &parent_refs)?)
+        self.restore(
+            None as Option<&str>,
+            Some(original_commit),
+            Some(RevSet::from(&change)),
+        )
+        .context(String::from("Execute restore for derived commit"))?;
+        Ok(change)
     }
 
     pub fn cherrypick(&self, commit_oid: Oid, onto_oid: Oid) -> Result<git2::Index> {
@@ -524,7 +525,11 @@ impl Jujutsu {
         Ok(())
     }
 
-    pub fn bookmark_create<S: AsRef<str>>(&mut self, name: S, revision: Option<&str>) -> Result<()> {
+    pub fn bookmark_create<S: AsRef<str>>(
+        &mut self,
+        name: S,
+        revision: Option<&str>,
+    ) -> Result<()> {
         let mut args = vec!["bookmark", "create", name.as_ref()];
         if let Some(rev) = revision {
             args.extend(["-r", rev]);
@@ -755,7 +760,8 @@ impl Jujutsu {
     }
 
     pub fn update(&mut self) -> Result<()> {
-        self.run_captured_with_args(["workspace", "update-stale"]).map(|_| {})
+        self.run_captured_with_args(["workspace", "update-stale"])
+            .map(|_| {})
     }
 }
 
@@ -1035,41 +1041,42 @@ mod tests {
         let _commit1 = create_jujutsu_commit(&repo_path, "Original commit", "original content");
 
         let git_repo = git2::Repository::open(&repo_path).expect("Failed to open git repository");
-        let jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
+        let mut jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
 
         // Get the original commit
         let original_commit_oid = jj
             .resolve_revision_to_commit_id("@-")
             .expect("Failed to resolve @- revision");
-        let original_commit = jj
-            .git_repo
-            .find_commit(original_commit_oid)
-            .expect("Failed to find original commit");
 
         // Sleep briefly to ensure timestamp difference
         std::thread::sleep(std::time::Duration::from_secs(1));
 
         // Create a derived commit
-        let tree_oid = original_commit.tree().expect("Failed to get tree").id();
-        let parent_oids = if original_commit.parents().count() > 0 {
-            vec![
-                original_commit
-                    .parent(0)
-                    .expect("Failed to get parent")
-                    .id(),
-            ]
-        } else {
-            vec![]
+        let parent_oids = {
+            let original_commit = jj
+                .git_repo
+                .find_commit(original_commit_oid)
+                .expect("Failed to find original commit");
+
+            if original_commit.parents().count() > 0 {
+                vec![
+                    original_commit
+                        .parent(0)
+                        .expect("Failed to get parent")
+                        .id(),
+                ]
+            } else {
+                vec![]
+            }
         };
 
+        let change = RevSet::from(
+            &jj.create_derived_commit(original_commit_oid, "Derived commit message", &parent_oids)
+                .expect("Failed to create derived commit"),
+        );
         let derived_commit_oid = jj
-            .create_derived_commit(
-                original_commit_oid,
-                "Derived commit message",
-                tree_oid,
-                &parent_oids,
-            )
-            .expect("Failed to create derived commit");
+            .resolve_revision_to_commit_id(change.as_ref())
+            .expect("Faield to find commit for derived change");
 
         // Get the derived commit
         let derived_commit = jj
@@ -1077,6 +1084,10 @@ mod tests {
             .find_commit(derived_commit_oid)
             .expect("Failed to find derived commit");
 
+        let original_commit = jj
+            .git_repo
+            .find_commit(original_commit_oid)
+            .expect("Failed to find original commit");
         // Verify that derived timestamps are newer than original
         let original_author_time = original_commit.author().when();
         let derived_author_time = derived_commit.author().when();
