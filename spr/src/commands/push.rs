@@ -251,11 +251,12 @@ async fn do_push_single<PR, H: AsRef<str>>(
     } else {
         format!("Rebased")
     });
-    ws.work_done.push(if parents.len() == 1 {
-        WorkEvent::Updated
-    } else {
-        WorkEvent::Rebased
-    });
+    if real_change {
+        ws.work_done.push(WorkEvent::Updated);
+    }
+    if parents.len() > 1 {
+        ws.work_done.push(WorkEvent::Rebased);
+    }
 
     Ok(())
 }
