@@ -1999,4 +1999,133 @@ pub mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn test_split_and_reorder() {
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
+        let repo_path = jj.git_repo.workdir().expect("Failed to get workdir").to_path_buf();
+
+        // 1. Create a change with 2 affected files
+        fs::write(repo_path.join("file1.txt"), "content 1").expect("Failed to write file1");
+        fs::write(repo_path.join("file2.txt"), "content 2").expect("Failed to write file2");
+        
+        // Commit it
+        let _ = std::process::Command::new("jj")
+            .args(["commit", "-m", "Original commit"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to commit");
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+
+        // Push it (creates a PR)
+        super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_message(Some("message")),
+        )
+        .await
+        .expect("Initial push failed");
+
+        assert_eq!(gh.pull_requests.len(), 1);
+        let original_pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
+        assert_eq!(original_pr.title, "Original commit");
+
+        // 2. Split the commit into two.
+        // We'll simulate `jj split` by using `jj new`, `jj restore`, and `jj squash`.
+        // Current state: trunk -> B (file1, file2, PR 1) -> @ (empty)
+        
+        // We want: trunk -> B1 (file1) -> B2 (file2, PR 1)
+        
+        // Get the change ID of the commit with files
+        let commit_b_change_id = jj.revset_to_change_id(&RevSet::current().parent()).expect("Failed to get parent change id");
+        
+        // Create B1
+        let _ = std::process::Command::new("jj")
+            .args(["new", "main", "-m", "Parent commit"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to create B1");
+        
+        let _ = std::process::Command::new("jj")
+            .args(["restore", "--from", commit_b_change_id.as_ref(), "file1.txt"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to restore file1.txt");
+        
+        // Now @ is B1.
+        let b1_change_id = jj.revset_to_change_id(&RevSet::current()).expect("Failed to get B1 change id");
+        
+        // Create B2 on top of B1
+        let _ = std::process::Command::new("jj")
+            .args(["new", b1_change_id.as_ref(), "-m", "Original commit"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to create B2");
+        
+        let _ = std::process::Command::new("jj")
+            .args(["restore", "--from", commit_b_change_id.as_ref(), "file2.txt"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to restore file2.txt");
+
+        // Add the PR line to B2 so it "preserves its PR"
+        let b2_message = format!("Child commit\n\nPull Request: https://github.com/test_owner/test_repo/pull/1");
+        let _ = std::process::Command::new("jj")
+            .args(["describe", "-m", &b2_message])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to describe B2");
+
+        // Abandon the original commit B
+        let _ = std::process::Command::new("jj")
+            .args(["abandon", commit_b_change_id.as_ref()])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to abandon original commit");
+
+        // 3. Clean up the parent commit (B1) to no longer track the PR.
+        // It already doesn't have the PR line because we gave it a new message.
+        
+        // 4. Push again with reordering
+        super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_message(Some("message")),
+        )
+        .await
+        .expect("Second push failed");
+
+        // 5. Assertions:
+        // - parent got a new PR (PR 2)
+        // - child preserved its PR (PR 1)
+        // - child PR got rebased onto the new parent (PR 2's branch)
+        
+        assert_eq!(gh.pull_requests.len(), 2, "Should have 2 PRs now");
+        
+        let pr1 = gh.pull_requests.get(&1).expect("PR 1 should still exist");
+        let pr2 = gh.pull_requests.get(&2).expect("PR 2 should have been created");
+        
+        assert_eq!(pr2.title, "Parent commit");
+        // Parent PR should be based on main
+        assert_eq!(pr2.base, "main", "Parent PR base should be main");
+        // PR 1 currently keeps its original title on GitHub because jj-spr doesn't update titles/bodies for existing PRs yet
+        assert_eq!(pr1.title, "Original commit");
+        
+        // Assert that pr1 (child) now has pr2's branch as its base
+        assert_eq!(pr1.base, pr2.head, "Child PR base should be parent PR head");
+        
+        // Also verify the branches on the bare repository
+        let pr1_branch = bare.find_branch(&pr1.head, git2::BranchType::Local).expect("PR 1 branch should exist on bare");
+        let pr2_branch = bare.find_branch(&pr2.head, git2::BranchType::Local).expect("PR 2 branch should exist on bare");
+        
+        let pr1_oid = pr1_branch.get().target().expect("PR 1 branch should have OID");
+        let pr2_oid = pr2_branch.get().target().expect("PR 2 branch should have OID");
+        
+        assert!(bare.merge_base(pr1_oid, pr2_oid).expect("Failed to get merge base") == pr2_oid, "PR 1 should be based on PR 2");
+    }
 }
