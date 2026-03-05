@@ -54,36 +54,40 @@ impl PushOptions {
     }
 }
 
-enum WorkEvent {
-    Rebased,
-    Updated,
-    PRCreated,
-    ReviewRequested,
-    Assigned,
+enum WorkEvent<'a> {
+    Rebased(&'a crate::config::Config),
+    Updated(&'a crate::config::Config),
+    PRCreated(&'a crate::config::Config),
+    ReviewRequested(&'a crate::config::Config),
+    Assigned(&'a crate::config::Config),
 }
 
-type WorkLog = Vec<WorkEvent>;
-impl std::fmt::Display for WorkEvent {
+type WorkLog<'a> = Vec<WorkEvent<'a>>;
+impl<'a> std::fmt::Display for WorkEvent<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            WorkEvent::Rebased => "Rebased",
-            WorkEvent::Updated => "Updated",
-            WorkEvent::PRCreated => "Create Pull Request",
-            WorkEvent::ReviewRequested => "Requested Reviews",
-            WorkEvent::Assigned => "Assigned users",
-        })
+        let (name, icon) = match self {
+            WorkEvent::Rebased(c) => ("Rebased", c.icons.ok.as_ref()),
+            WorkEvent::Updated(c) => ("Updated", c.icons.ok.as_ref()),
+            WorkEvent::PRCreated(c) => ("Create Pull Request", c.icons.sparkle.as_ref()),
+            WorkEvent::ReviewRequested(c) => ("Requested Reviews", c.icons.ok.as_ref()),
+            WorkEvent::Assigned(c) => ("Assigned users", c.icons.ok.as_ref()),
+        };
+
+        f.write_str(name)?;
+        f.write_str(icon)?;
+        Ok(())
     }
 }
 
-struct WorkSet<PR> {
+struct WorkSet<'a, PR> {
     revision: crate::jj::Revision,
     progress_bar: indicatif::ProgressBar,
     pull_request: PR,
-    work_done: WorkLog,
+    work_done: WorkLog<'a>,
 }
 
-impl<PR> WorkSet<PR> {
-    fn map<F, O>(self, fun: F) -> WorkSet<O>
+impl<'a, PR> WorkSet<'a, PR> {
+    fn map<F, O>(self, fun: F) -> WorkSet<'a, O>
     where
         F: FnOnce(PR) -> O,
     {
@@ -95,9 +99,9 @@ impl<PR> WorkSet<PR> {
         }
     }
 
-    fn format_worklog(&self) -> String {
+    fn format_worklog(&self, config: &crate::config::Config) -> String {
         if self.work_done.is_empty() {
-            return String::from("Nothing to be done.");
+            return format!("Nothing to be done {}.", config.icons.ok.as_ref());
         }
 
         let stringified: Vec<_> = self.work_done.iter().map(|e| format!("{}", e)).collect();
@@ -105,13 +109,13 @@ impl<PR> WorkSet<PR> {
     }
 }
 
-async fn do_push_single<PR, H: AsRef<str>>(
+async fn do_push_single<'a, PR, H: AsRef<str>>(
     jj: &mut crate::jj::Jujutsu,
-    config: &crate::config::Config,
+    config: &'a crate::config::Config,
     opts: &PushOptions,
     base_ref: &crate::jj::RevSet,
     head_branch: H,
-    ws: &mut WorkSet<PR>,
+    ws: &mut WorkSet<'a, PR>,
 ) -> Result<()> {
     ws.progress_bar.set_message("Building new commit");
     let base_oid = jj
@@ -220,9 +224,9 @@ async fn do_push_single<PR, H: AsRef<str>>(
         format!("Rebased")
     });
     ws.work_done.push(if parents.len() == 1 {
-        WorkEvent::Updated
+        WorkEvent::Updated(config)
     } else {
-        WorkEvent::Rebased
+        WorkEvent::Rebased(config)
     });
 
     Ok(())
@@ -235,16 +239,16 @@ struct BranchAction {
     existing_nr: Option<u64>,
 }
 
-async fn do_push<I, PR>(
-    config: &crate::config::Config,
+async fn do_push<'a, I, PR>(
+    config: &'a crate::config::Config,
     jj: &mut crate::jj::Jujutsu,
     opts: &PushOptions,
     work: I,
     trunk_head: &crate::jj::RevSet,
-) -> Result<Vec<WorkSet<BranchAction>>>
+) -> Result<Vec<WorkSet<'a, BranchAction>>>
 where
     PR: crate::github::GHPullRequest,
-    I: IntoIterator<Item = WorkSet<Option<PR>>>,
+    I: IntoIterator<Item = WorkSet<'a, Option<PR>>>,
 {
     // ChangeID, head branch, base branch, existing pr
     let mut seen: Vec<WorkSet<BranchAction>> = Vec::new();
@@ -549,7 +553,7 @@ where
             )
             .await?;
 
-        workset.work_done.push(WorkEvent::PRCreated);
+        workset.work_done.push(WorkEvent::PRCreated(config));
         workset
             .progress_bar
             .set_prefix(format!("{} ({})", workset.revision.title, config.pull_request_url(pr.pr_number())));
@@ -557,13 +561,13 @@ where
             workset.progress_bar.set_message("Requesting reviewers");
             gh.add_reviewers(&pr, reviewers.split(",").map(|s| s.trim()))
                 .await?;
-            workset.work_done.push(WorkEvent::ReviewRequested);
+            workset.work_done.push(WorkEvent::ReviewRequested(config));
         }
         if let Some(assignees) = workset.revision.message.get(&MessageSection::Assignees) {
             workset.progress_bar.set_message("Requesting assignees");
             gh.add_assignees(&pr, assignees.split(",").map(|s| s.trim()))
                 .await?;
-            workset.work_done.push(WorkEvent::Assigned);
+            workset.work_done.push(WorkEvent::Assigned(config));
         }
 
         let pull_request_url = config.pull_request_url(pr.pr_number());
@@ -589,7 +593,7 @@ where
         workset.progress_bar.set_message("Created PR");
     }
     for ws in actions.iter() {
-        ws.progress_bar.finish_with_message(ws.format_worklog());
+        ws.progress_bar.finish_with_message(ws.format_worklog(config));
     }
     setup.set_message("Figuring out PR tree");
 
