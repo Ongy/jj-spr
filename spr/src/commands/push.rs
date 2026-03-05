@@ -66,10 +66,10 @@ type WorkLog<'a> = Vec<WorkEvent<'a>>;
 impl<'a> std::fmt::Display for WorkEvent<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (name, icon) = match self {
-            WorkEvent::Rebased(c) => ("Rebased", c.icons.ok.as_ref()),
-            WorkEvent::Updated(c) => ("Updated", c.icons.ok.as_ref()),
+            WorkEvent::Rebased(c) => ("Rebased", c.icons.refresh.as_ref()),
+            WorkEvent::Updated(c) => ("Updated", c.icons.working.as_ref()),
             WorkEvent::PRCreated(c) => ("Create Pull Request", c.icons.sparkle.as_ref()),
-            WorkEvent::ReviewRequested(c) => ("Requested Reviews", c.icons.ok.as_ref()),
+            WorkEvent::ReviewRequested(c) => ("Requested Reviews", c.icons.eyes.as_ref()),
             WorkEvent::Assigned(c) => ("Assigned users", c.icons.ok.as_ref()),
         };
 
@@ -101,7 +101,7 @@ impl<'a, PR> WorkSet<'a, PR> {
 
     fn format_worklog(&self, config: &crate::config::Config) -> String {
         if self.work_done.is_empty() {
-            return format!("Nothing to be done {}.", config.icons.ok.as_ref());
+            return format!("Nothing to be done {}.", config.icons.sleeping.as_ref());
         }
 
         let stringified: Vec<_> = self.work_done.iter().map(|e| format!("{}", e)).collect();
