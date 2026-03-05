@@ -39,6 +39,15 @@ fn default_stop() -> Icon {
 fn default_wave() -> Icon {
     Icon(String::from("👋"))
 }
+fn default_eyes() -> Icon {
+    Icon(String::from("👀"))
+}
+fn default_working() -> Icon {
+    Icon(String::from("🛠️"))
+}
+fn default_sleeping() -> Icon {
+    Icon(String::from("💤"))
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Icons {
@@ -71,6 +80,15 @@ pub struct Icons {
 
     #[serde(default = "default_wave")]
     pub wave: Icon,
+
+    #[serde(default = "default_eyes")]
+    pub eyes: Icon,
+
+    #[serde(default = "default_working")]
+    pub working: Icon,
+
+    #[serde(default = "default_sleeping")]
+    pub sleeping: Icon,
 }
 
 pub fn from_jj(jj: &crate::jj::Jujutsu) -> crate::error::Result<Icons> {
