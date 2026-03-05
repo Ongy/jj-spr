@@ -763,6 +763,19 @@ impl Jujutsu {
         self.run_captured_with_args(["workspace", "update-stale"])
             .map(|_| {})
     }
+
+    pub fn is_empty(&self, change: &ChangeId) -> Result<bool> {
+        let output = self.run_ro_captured_with_args([
+            "log",
+            "--no-graph",
+            "-r",
+            RevSet::from(change).unique().as_ref(),
+            "--template",
+            "empty",
+        ])?;
+
+        Ok(output.trim() == "true")
+    }
 }
 
 fn get_jj_bin() -> PathBuf {

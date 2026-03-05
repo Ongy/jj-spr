@@ -170,10 +170,42 @@ async fn do_push_single<'a, PR, H: AsRef<str>>(
         )));
     }
 
+    let real_change = parents.len() == 1 || {
+        let pre_rev = {
+            let pre_commit = jj
+                .create_derived_commit(
+                    target_oid,
+                    "Staging commit for change detection via jj-spr",
+                    parents,
+                )
+                .context(String::from("Creating pre-commit"))?;
+
+            crate::jj::RevSet::from(&pre_commit)
+        };
+
+        // We need to update so JJ learns about the commit we just created.
+        jj.update()
+            .context(String::from("Update JJ to learn about pre-commit"))?;
+        let changed = !jj
+            .is_empty(
+                &jj.revset_to_change_id(&pre_rev)
+                    .context(String::from("Resolve commit to ChangeID for pre-commit"))?,
+            )
+            .context(String::from("Check if pre-commit is empty"))?;
+        // Since this is a local-only change, we have to abandon it.
+        // Otherwise it'll show up in `jj log` for the user afterwards.
+        jj.abandon(&pre_rev).context(String::from(
+            "Failed to abandon temporary change for change detection",
+        ))?;
+        changed
+    };
+
     let message = if head_oid == base_oid
         && let Some(title) = ws.revision.message.get(&MessageSection::Title)
     {
         format!("{}\n\n{}", title, build_github_body(&ws.revision.message))
+    } else if !real_change {
+        String::from("Rebasing with jj-spr")
     } else if let Some(ref msg) = opts.message {
         msg.clone()
     } else {
@@ -223,11 +255,12 @@ async fn do_push_single<'a, PR, H: AsRef<str>>(
     } else {
         format!("Rebased")
     });
-    ws.work_done.push(if parents.len() == 1 {
-        WorkEvent::Updated(config)
-    } else {
-        WorkEvent::Rebased(config)
-    });
+    if real_change {
+        ws.work_done.push(WorkEvent::Updated(config));
+    }
+    if parents.len() > 1 {
+        ws.work_done.push(WorkEvent::Rebased(config));
+    }
 
     Ok(())
 }
@@ -554,9 +587,11 @@ where
             .await?;
 
         workset.work_done.push(WorkEvent::PRCreated(config));
-        workset
-            .progress_bar
-            .set_prefix(format!("{} ({})", workset.revision.title, config.pull_request_url(pr.pr_number())));
+        workset.progress_bar.set_prefix(format!(
+            "{} ({})",
+            workset.revision.title,
+            config.pull_request_url(pr.pr_number())
+        ));
         if let Some(reviewers) = workset.revision.message.get(&MessageSection::Reviewers) {
             workset.progress_bar.set_message("Requesting reviewers");
             gh.add_reviewers(&pr, reviewers.split(",").map(|s| s.trim()))
