@@ -143,7 +143,7 @@ async fn do_push_single<H: AsRef<str>>(
         msg.clone()
     } else {
         dialoguer::Input::<String>::new()
-            .with_prompt("Message")
+            .with_prompt(format!("Message for '{}'", revision.title))
             .with_initial_text("")
             .allow_empty(true)
             .interact_text()?
