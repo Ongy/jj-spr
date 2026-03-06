@@ -48,6 +48,11 @@ impl PushOptions {
         self
     }
 
+    pub fn with_all(mut self, val: bool) -> Self {
+        self.all = val;
+        self
+    }
+
     pub fn with_existing(mut self, val: bool) -> Self {
         self.existing = val;
         self
@@ -266,10 +271,10 @@ async fn do_push_single<'a, PR, H: AsRef<str>>(
 }
 
 #[derive(Debug, Clone)]
-struct BranchAction {
+struct BranchAction<PR> {
     head_branch: String,
     base_branch: String,
-    existing_nr: Option<u64>,
+    old_pr: Option<PR>,
 }
 
 async fn do_push<'a, I, PR>(
@@ -278,13 +283,13 @@ async fn do_push<'a, I, PR>(
     opts: &PushOptions,
     work: I,
     trunk_head: &crate::jj::RevSet,
-) -> Result<Vec<WorkSet<'a, BranchAction>>>
+) -> Result<Vec<WorkSet<'a, BranchAction<PR>>>>
 where
     PR: crate::github::GHPullRequest,
     I: IntoIterator<Item = WorkSet<'a, Option<PR>>>,
 {
     // ChangeID, head branch, base branch, existing pr
-    let mut seen: Vec<WorkSet<BranchAction>> = Vec::new();
+    let mut seen: Vec<WorkSet<BranchAction<PR>>> = Vec::new();
     for mut ws in work.into_iter() {
         ws.progress_bar.set_message("Finding base commits");
 
@@ -302,9 +307,7 @@ where
                 .unwrap_or("");
             config.get_new_branch_name(&jj.get_all_ref_names()?, title)
         };
-        let base_branch = if let Some(ref pr) = ws.pull_request {
-            Some(pr.base_branch_name().to_string())
-        } else if let Some(ba) = seen
+        let base_branch = if let Some(ba) = seen
             .iter()
             .find(|ba| ba.revision.id == ws.revision.parent_ids[0])
         {
@@ -336,7 +339,7 @@ where
         seen.push(ws.map(|pr| BranchAction {
             head_branch: head_ref,
             base_branch: owned_base,
-            existing_nr: pr.map(|pr| pr.pr_number()),
+            old_pr: pr,
         }));
     }
     Ok(seen)
@@ -553,15 +556,18 @@ where
     setup.set_message("Setting up PRs");
     for workset in actions.iter_mut().into_iter() {
         // We don't know what to do with these yet...
-        if let Some(_) = workset.pull_request.existing_nr {
+        if let Some(ref pr) = workset.pull_request.old_pr {
+            if workset.pull_request.base_branch != pr.base_branch_name() {
+                workset.progress_bar.set_message("Rebasing on GitHub");
+                gh.rebase_pr(pr.pr_number(), &workset.pull_request.base_branch)
+                    .await?;
+            }
             workset
                 .progress_bar
                 .set_message("Updating revision description");
             // This will at least write the current commit message.
             jj.update_revision_message(&workset.revision)?;
-            workset
-                .progress_bar
-                .set_message("Updated revision description");
+            workset.progress_bar.set_message("Handled post actions");
             continue;
         }
 
@@ -628,7 +634,8 @@ where
         workset.progress_bar.set_message("Created PR");
     }
     for ws in actions.iter() {
-        ws.progress_bar.finish_with_message(ws.format_worklog(config));
+        ws.progress_bar
+            .finish_with_message(ws.format_worklog(config));
     }
     setup.set_message("Figuring out PR tree");
 
@@ -1217,6 +1224,93 @@ pub mod tests {
             .target()
             .expect("Failed to get oid from pr branch");
         assert!(trunk_oid != pr_oid, "PR and trunk should not be equal");
+    }
+
+    mod rebase_prs {
+        use crate::testing;
+
+        #[tokio::test]
+        async fn to_main() {
+            let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+            gh.pull_requests
+                .get_mut(&1)
+                .expect("Should have created PR 1")
+                .base = String::from("spr/test/my-commit");
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            assert_eq!(
+                gh.pull_requests.get(&1).expect("Should still have PR").base,
+                testing::config::basic().master_ref,
+                "PR base was not updated"
+            );
+        }
+
+        #[tokio::test]
+        async fn to_base_main() {
+            let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+            let trunk_rev = crate::jj::RevSet::from(
+                &jj.revset_to_change_id(&crate::jj::RevSet::current().parent())
+                    .expect("Should have changeID for current"),
+            );
+            let first_id = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+            jj.new_revision(Some(trunk_rev), None as Option<&str>, false)
+                .expect("Should be able to new onto something else");
+
+            let second_id = super::create_jujutsu_commit_in_file(
+                &mut jj,
+                "Other commit",
+                "Other content",
+                "other file",
+            );
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default()
+                    .with_all(true)
+                    .with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+            jj.rebase_branch(&crate::jj::RevSet::from(&second_id), first_id)
+                .expect("Should be able to rebase change");
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")),
+            )
+            .await
+            .expect("stacked shouldn't fail");
+
+            assert_ne!(
+                gh.pull_requests.get(&2).expect("Should still have PR").base,
+                testing::config::basic().master_ref,
+                "PR base was not updated"
+            );
+        }
     }
 
     mod revset {
@@ -2074,5 +2168,171 @@ pub mod tests {
                 comments.len()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_split_and_reorder() {
+        let (_temp_dir, mut jj, bare) = testing::setup::repo_with_origin();
+        let repo_path = jj
+            .git_repo
+            .workdir()
+            .expect("Failed to get workdir")
+            .to_path_buf();
+
+        // 1. Create a change with 2 affected files
+        fs::write(repo_path.join("file1.txt"), "content 1").expect("Failed to write file1");
+        fs::write(repo_path.join("file2.txt"), "content 2").expect("Failed to write file2");
+
+        // Commit it
+        let _ = std::process::Command::new("jj")
+            .args(["commit", "-m", "Original commit"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to commit");
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+
+        // Push it (creates a PR)
+        super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_message(Some("message")),
+        )
+        .await
+        .expect("Initial push failed");
+
+        assert_eq!(gh.pull_requests.len(), 1);
+        let original_pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
+        assert_eq!(original_pr.title, "Original commit");
+
+        // 2. Split the commit into two.
+        // We'll simulate `jj split` by using `jj new`, `jj restore`, and `jj squash`.
+        // Current state: trunk -> B (file1, file2, PR 1) -> @ (empty)
+
+        // We want: trunk -> B1 (file1) -> B2 (file2, PR 1)
+
+        // Get the change ID of the commit with files
+        let commit_b_change_id = jj
+            .revset_to_change_id(&RevSet::current().parent())
+            .expect("Failed to get parent change id");
+
+        // Create B1
+        let _ = std::process::Command::new("jj")
+            .args(["new", "main", "-m", "Parent commit"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to create B1");
+
+        let _ = std::process::Command::new("jj")
+            .args([
+                "restore",
+                "--from",
+                commit_b_change_id.as_ref(),
+                "file1.txt",
+            ])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to restore file1.txt");
+
+        // Now @ is B1.
+        let b1_change_id = jj
+            .revset_to_change_id(&RevSet::current())
+            .expect("Failed to get B1 change id");
+
+        // Create B2 on top of B1
+        let _ = std::process::Command::new("jj")
+            .args(["new", b1_change_id.as_ref(), "-m", "Original commit"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to create B2");
+
+        let _ = std::process::Command::new("jj")
+            .args([
+                "restore",
+                "--from",
+                commit_b_change_id.as_ref(),
+                "file2.txt",
+            ])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to restore file2.txt");
+
+        // Add the PR line to B2 so it "preserves its PR"
+        let b2_message =
+            format!("Child commit\n\nPull Request: https://github.com/test_owner/test_repo/pull/1");
+        let _ = std::process::Command::new("jj")
+            .args(["describe", "-m", &b2_message])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to describe B2");
+
+        // Abandon the original commit B
+        let _ = std::process::Command::new("jj")
+            .args(["abandon", commit_b_change_id.as_ref()])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to abandon original commit");
+
+        // 3. Clean up the parent commit (B1) to no longer track the PR.
+        // It already doesn't have the PR line because we gave it a new message.
+
+        // 4. Push again with reordering
+        super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_message(Some("message")),
+        )
+        .await
+        .expect("Second push failed");
+
+        // 5. Assertions:
+        // - parent got a new PR (PR 2)
+        // - child preserved its PR (PR 1)
+        // - child PR got rebased onto the new parent (PR 2's branch)
+
+        assert_eq!(gh.pull_requests.len(), 2, "Should have 2 PRs now");
+
+        let pr1 = gh.pull_requests.get(&1).expect("PR 1 should still exist");
+        let pr2 = gh
+            .pull_requests
+            .get(&2)
+            .expect("PR 2 should have been created");
+
+        assert_eq!(pr2.title, "Parent commit");
+        // Parent PR should be based on main
+        assert_eq!(pr2.base, "main", "Parent PR base should be main");
+        // PR 1 currently keeps its original title on GitHub because jj-spr doesn't update titles/bodies for existing PRs yet
+        assert_eq!(pr1.title, "Original commit");
+
+        // Assert that pr1 (child) now has pr2's branch as its base
+        assert_eq!(pr1.base, pr2.head, "Child PR base should be parent PR head");
+
+        // Also verify the branches on the bare repository
+        let pr1_branch = bare
+            .find_branch(&pr1.head, git2::BranchType::Local)
+            .expect("PR 1 branch should exist on bare");
+        let pr2_branch = bare
+            .find_branch(&pr2.head, git2::BranchType::Local)
+            .expect("PR 2 branch should exist on bare");
+
+        let pr1_oid = pr1_branch
+            .get()
+            .target()
+            .expect("PR 1 branch should have OID");
+        let pr2_oid = pr2_branch
+            .get()
+            .target()
+            .expect("PR 2 branch should have OID");
+
+        assert!(
+            bare.merge_base(pr1_oid, pr2_oid)
+                .expect("Failed to get merge base")
+                == pr2_oid,
+            "PR 1 should be based on PR 2"
+        );
     }
 }
