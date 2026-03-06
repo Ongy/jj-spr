@@ -2221,7 +2221,7 @@ pub mod tests {
 
         // Create B1
         let _ = std::process::Command::new("jj")
-            .args(["new", "main", "-m", "Parent commit"])
+            .args(["new", "main@origin", "-m", "Parent commit"])
             .current_dir(&repo_path)
             .output()
             .expect("Failed to create B1");
