@@ -7,10 +7,10 @@
 
 use std::collections::HashSet;
 
-use crate::{error::Result, utils::slugify};
+use crate::{error::ResultExt, utils::slugify};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug)]
 struct ParseConfig {
     #[serde(default)]
     drawing: super::drawing::Drawing,
@@ -24,6 +24,7 @@ struct ParseConfig {
 // main config to push it down 1 layer in the config topology.
 #[derive(Serialize, Deserialize, Debug)]
 struct ConfigWrapper {
+    #[serde(default)]
     spr: ParseConfig,
 }
 
@@ -127,7 +128,7 @@ impl Config {
     }
 }
 
-fn value_from_jj<S: AsRef<str> + Copy>(jj: &crate::jj::Jujutsu, key: S) -> Result<String> {
+fn value_from_jj<S: AsRef<str> + Copy>(jj: &crate::jj::Jujutsu, key: S) -> crate::error::Result<String> {
     jj.config_get(key).or_else(|_| {
         Ok(String::from(
             jj.git_repo.config()?.get_str(key.as_ref())?.trim(),
@@ -135,7 +136,7 @@ fn value_from_jj<S: AsRef<str> + Copy>(jj: &crate::jj::Jujutsu, key: S) -> Resul
     })
 }
 
-pub fn remote_from_jj(jj: &crate::jj::Jujutsu) -> Result<String> {
+pub fn remote_from_jj(jj: &crate::jj::Jujutsu) -> crate::error::Result<String> {
     let trunk = jj
         .config_get("revset-aliases.\"trunk()\"")
         .unwrap_or(String::from(""));
@@ -174,7 +175,7 @@ pub fn remote_from_jj(jj: &crate::jj::Jujutsu) -> Result<String> {
 pub fn repo_and_owner_from_jj(
     jj: &crate::jj::Jujutsu,
     remote_name: &str,
-) -> Result<(String, String)> {
+) -> crate::error::Result<(String, String)> {
     let remote_info = jj
         .git_remote_list()?
         .lines()
@@ -216,7 +217,7 @@ pub fn repo_and_owner_from_jj(
     }
 }
 
-pub fn default_branch_from_jj(jj: &crate::jj::Jujutsu) -> Result<String> {
+pub fn default_branch_from_jj(jj: &crate::jj::Jujutsu) -> crate::error::Result<String> {
     let trunk = jj
         .config_get("revset-aliases.\"trunk()\"")
         .unwrap_or(String::from(""));
@@ -235,7 +236,7 @@ pub fn default_branch_from_jj(jj: &crate::jj::Jujutsu) -> Result<String> {
     })
 }
 
-fn parsed_from_jj(jj: &crate::jj::Jujutsu) -> Result<ParseConfig> {
+fn parsed_from_jj(jj: &crate::jj::Jujutsu) -> crate::error::Result<ParseConfig> {
     let full_config = jj
         .config_get("spr")
         .map_or(String::from(""), |v| format!("spr = {}", v));
@@ -243,11 +244,11 @@ fn parsed_from_jj(jj: &crate::jj::Jujutsu) -> Result<ParseConfig> {
     Ok(parsed.spr)
 }
 
-pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
+pub async fn from_jj<F: AsyncFnOnce() -> crate::error::Result<String>>(
     jj: &crate::jj::Jujutsu,
     user: F,
-) -> Result<Config> {
-    let parsed = parsed_from_jj(jj)?;
+) -> crate::error::Result<Config> {
+    let parsed = parsed_from_jj(jj).context(String::from("read full config from jj"))?;
 
     let remote_name = remote_from_jj(jj)?;
     let branch_prefix = match value_from_jj(jj, "spr.branchPrefix") {
@@ -327,7 +328,7 @@ pub fn get_config_value(key: &str, git_config: &git2::Config) -> Option<String> 
 }
 
 /// Helper function to set config value in jj (repo-level)
-pub fn set_jj_config(key: &str, value: &str, repo_path: &std::path::Path) -> Result<()> {
+pub fn set_jj_config(key: &str, value: &str, repo_path: &std::path::Path) -> crate::error::Result<()> {
     let output = std::process::Command::new("jj")
         .args(["config", "set", "--repo", key, value])
         .current_dir(repo_path)

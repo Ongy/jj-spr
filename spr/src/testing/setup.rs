@@ -1,4 +1,4 @@
-use std::fs;
+use std::{env, fs};
 
 fn create_test_git_repo<P: AsRef<std::path::Path>>(path: P) -> git2::Repository {
     fs::create_dir(&path).expect("Failed to create bare repo");
@@ -81,6 +81,11 @@ fn clone_repo<P: AsRef<std::path::Path>, Q: AsRef<std::path::Path>>(
 }
 
 pub fn repo_with_origin() -> (tempfile::TempDir, crate::jj::Jujutsu, git2::Repository) {
+    // Prevent JJ from loading user configs to isolate tests better.
+    unsafe {
+        env::set_var("JJ_CONFIG", "");
+    }
+
     let temp_dir = tempfile::TempDir::new().expect("Failed to create temp directory");
     let bare_path = temp_dir.path().join("bare");
     let repo_path = temp_dir.path().join("clone");
@@ -89,6 +94,5 @@ pub fn repo_with_origin() -> (tempfile::TempDir, crate::jj::Jujutsu, git2::Repos
     let repo = clone_repo(bare_path.clone(), repo_path.clone());
 
     let jj = crate::jj::Jujutsu::new(repo).expect("Failed to create JJ object in cloned repo");
-
     return (temp_dir, jj, bare);
 }
