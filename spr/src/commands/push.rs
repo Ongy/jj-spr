@@ -91,6 +91,12 @@ struct WorkSet<'a, PR> {
     work_done: WorkLog<'a>,
 }
 
+impl<T> AsRef<crate::jj::Revision> for WorkSet<'_, T> {
+    fn as_ref(&self) -> &crate::jj::Revision {
+        &self.revision
+    }
+}
+
 impl<'a, PR> WorkSet<'a, PR> {
     fn map<F, O>(self, fun: F) -> WorkSet<'a, O>
     where
@@ -352,22 +358,26 @@ where
     Ok(seen)
 }
 
-fn prepare_revision_comment(
-    tree: &crate::tree::Tree<crate::jj::Revision>,
+fn prepare_revision_comment<T>(
+    tree: &crate::tree::Tree<T>,
     config: &crate::config::Config,
-) -> Vec<String> {
+) -> Vec<String>
+where
+    T: AsRef<crate::jj::Revision>,
+{
     let mut lines = Vec::new();
     // The node itself doesn't need indents.
     // It is indented by the parent if necessary
+    let revision = tree.get().as_ref();
     lines.push(format!(
         "• [{}]({})",
-        tree.get().title,
-        if let Some(num) = tree.get().pull_request_number {
+        revision.title,
+        if let Some(num) = revision.pull_request_number {
             config.pull_request_url(num)
         } else {
             format!(
                 "Revision {:?} doesn't have a pull request yet. This is a bug.",
-                tree.get().id
+                revision.id
             )
         }
     ));
@@ -639,6 +649,7 @@ where
 
         jj.update_revision_message(&workset.revision)?;
         workset.progress_bar.set_message("Created PR");
+        workset.pull_request.old_pr = Some(pr);
     }
     for ws in actions.iter() {
         ws.progress_bar
@@ -646,9 +657,9 @@ where
     }
     setup.set_message("Figuring out PR tree");
 
-    let mut forest: crate::tree::Forest<crate::jj::Revision> = crate::tree::Forest::new();
-    for ba in actions {
-        let parent = ba
+    let mut forest: crate::tree::Forest<WorkSet<'_, Option<PR>>> = crate::tree::Forest::new();
+    for ws in actions {
+        let parent = ws
             .revision
             .parent_ids
             .first()
@@ -656,27 +667,27 @@ where
             .ok_or_else(|| {
                 crate::error::Error::new(format!(
                     "Found reivions {:?} in postprocessing that has no parents..?",
-                    ba.revision.id
+                    ws.revision.id
                 ))
             })?;
-        forest.insert_below(&|p: &crate::jj::Revision| p.id == parent, ba.revision);
+        forest.insert_below(&|p| p.revision.id == parent, ws.map(|ba| ba.old_pr));
     }
 
     setup.set_message("Updating tree overviews");
     for tree in forest.into_trees() {
         let prepared = prepare_revision_comment(&tree, config);
-        for rev in tree.into_iter() {
-            match rev.pull_request_number {
-                Some(number) => {
-                    let content = finalize_revision_comment(&rev, config, &prepared);
-                    gh.update_pr_comment(number, &content).await?;
+        for workset in tree.into_iter() {
+            match workset.pull_request {
+                Some(ref pr) => {
+                    let content = finalize_revision_comment(&workset.revision, config, &prepared);
+                    gh.update_pr_comment(pr, &content).await?;
                 }
                 None => {
                     crate::output::output(
                         &config.icons.error,
                         format!(
                             "Change {:?} has no PR attached. This is a bug at this point",
-                            rev.id
+                            workset.revision.id
                         ),
                     )?;
                 }
