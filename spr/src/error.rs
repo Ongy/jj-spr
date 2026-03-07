@@ -41,6 +41,14 @@ impl Error {
     }
 }
 
+impl From<toml::de::Error> for Error {
+    fn from(error: toml::de::Error) -> Self {
+        Self {
+            messages: vec![format!("{}", error)],
+        }
+    }
+}
+
 impl From<reqwest::header::InvalidHeaderValue> for Error {
     fn from(error: reqwest::header::InvalidHeaderValue) -> Self {
         Self {
@@ -67,14 +75,6 @@ impl From<tokio::task::JoinError> for Error {
 
 impl From<dialoguer::Error> for Error {
     fn from(error: dialoguer::Error) -> Self {
-        Self {
-            messages: vec![format!("{}", error)],
-        }
-    }
-}
-
-impl From<serde_json::Error> for Error {
-    fn from(error: serde_json::Error) -> Self {
         Self {
             messages: vec![format!("{}", error)],
         }

@@ -22,7 +22,7 @@ pub async fn init() -> Result<()> {
     ))?;
     let config = repo.config()?;
     let mut jj = crate::jj::Jujutsu::new(repo)?;
-    let icons = crate::config::icons::from_jj(&jj)?;
+    let icons = crate::config::icons::Icons::default();
 
     crate::output::output(&icons.wave, "Welcome to spr!")?;
 

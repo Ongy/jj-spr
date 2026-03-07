@@ -26,15 +26,8 @@ pub struct Drawing {
     pub cont: String,
 }
 
-pub fn from_jj(jj: &crate::jj::Jujutsu) -> crate::error::Result<Drawing> {
-    // This fails when the option was never set.
-    // Which is ok for us.
-    let raw = jj.config_get("spr.draw").unwrap_or(String::from("{}"));
-    Ok(serde_json::from_str(raw.as_str())?)
-}
-
 impl Default for Drawing {
     fn default() -> Self {
-        serde_json::from_str("{}").expect("Drawing should be defaultable via serde")
+        toml::from_str("").expect("Drawing should be defaultable via serde")
     }
 }

@@ -91,15 +91,8 @@ pub struct Icons {
     pub sleeping: Icon,
 }
 
-pub fn from_jj(jj: &crate::jj::Jujutsu) -> crate::error::Result<Icons> {
-    // This fails when the option was never set.
-    // Which is ok for us.
-    let raw = jj.config_get("spr.icons").unwrap_or(String::from("{}"));
-    Ok(serde_json::from_str(raw.as_str())?)
-}
-
 impl Default for Icons {
     fn default() -> Self {
-        serde_json::from_str("{}").expect("Icons should be defaultable via serde")
+        toml::from_str("").expect("Icons should be defaultable via serde")
     }
 }

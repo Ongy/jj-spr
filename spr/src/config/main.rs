@@ -8,6 +8,24 @@
 use std::collections::HashSet;
 
 use crate::{error::Result, utils::slugify};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ParseConfig {
+    #[serde(default)]
+    drawing: super::drawing::Drawing,
+    #[serde(default)]
+    icons: super::icons::Icons,
+}
+
+// Both `jj config list` and `jj config get` return valid yaml.
+// But both of them start at the "root" of the jj config.
+// To make it easier for us to simply parse the output, this struct wraps our
+// main config to push it down 1 layer in the config topology.
+#[derive(Serialize, Deserialize, Debug)]
+struct ConfigWrapper {
+    spr: ParseConfig,
+}
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -217,10 +235,20 @@ pub fn default_branch_from_jj(jj: &crate::jj::Jujutsu) -> Result<String> {
     })
 }
 
+fn parsed_from_jj(jj: &crate::jj::Jujutsu) -> Result<ParseConfig> {
+    let full_config = jj
+        .config_get("spr")
+        .map_or(String::from(""), |v| format!("spr = {}", v));
+    let parsed: ConfigWrapper = toml::from_str(full_config.as_ref())?;
+    Ok(parsed.spr)
+}
+
 pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
     jj: &crate::jj::Jujutsu,
     user: F,
 ) -> Result<Config> {
+    let parsed = parsed_from_jj(jj)?;
+
     let remote_name = remote_from_jj(jj)?;
     let branch_prefix = match value_from_jj(jj, "spr.branchPrefix") {
         Ok(val) => Ok(val),
@@ -228,8 +256,6 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
     }?;
     let master_branch = default_branch_from_jj(jj)?;
     let (repo, owner) = repo_and_owner_from_jj(jj, remote_name.as_ref())?;
-    let drawing = super::drawing::from_jj(jj)?;
-    let icons = super::icons::from_jj(jj)?;
 
     Ok(Config::new(
         owner,
@@ -237,8 +263,8 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
         remote_name,
         master_branch,
         branch_prefix,
-        drawing,
-        icons,
+        parsed.drawing,
+        parsed.icons,
     ))
 }
 
@@ -599,6 +625,21 @@ mod tests {
                 config.master_ref, "branch",
                 "Failed to read target branch from config"
             );
+        }
+    }
+
+    mod parsing {
+        use crate::{config::main::parsed_from_jj, testing};
+
+        #[test]
+        fn parses_correctly() {
+            let (_tmpdir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.config_set("spr.drawing.space", " ", false)
+                .expect("Failed to set trunk alias.");
+
+            let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
+            assert_eq!(parsed.drawing.space, " ");
         }
     }
 }
