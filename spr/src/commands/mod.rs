@@ -5,9 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub mod adopt;
 pub mod fetch;
 pub mod init;
-pub mod adopt;
 pub mod push;
 pub mod sync;
 #[cfg(test)]

@@ -52,12 +52,14 @@ pub fn add_commit_on_and_push_to_remote_file<B: Display, I: IntoIterator<Item = 
         })
         .collect();
 
-    let parent_tree = repo.find_tree(
-        parent_commits
-            .get(0)
-            .expect("Should get at least one parent for this function")
-            .tree_id(),
-    ).expect("Should be able to find tree for parent's tree id");
+    let parent_tree = repo
+        .find_tree(
+            parent_commits
+                .get(0)
+                .expect("Should get at least one parent for this function")
+                .tree_id(),
+        )
+        .expect("Should be able to find tree for parent's tree id");
     index
         .read_tree(&parent_tree)
         .expect("Should be able to read parent tree");
