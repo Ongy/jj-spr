@@ -167,12 +167,12 @@ pub trait GitHubAdapter {
 
     fn list_comments(
         &self,
-        number: u64,
+        pr: &Self::PRAdapter,
     ) -> impl std::future::Future<Output = crate::error::Result<Vec<Self::PRComment>>>;
 
     fn post_comment<C>(
         &mut self,
-        pr: u64,
+        pr: &Self::PRAdapter,
         content: C,
     ) -> impl std::future::Future<Output = crate::error::Result<()>>
     where
@@ -189,14 +189,14 @@ pub trait GitHubAdapter {
 
     fn update_pr_comment<S>(
         &mut self,
-        number: u64,
+        pr: &Self::PRAdapter,
         content: S,
     ) -> impl std::future::Future<Output = crate::error::Result<()>>
     where
         S: Into<String>,
     {
         async move {
-            let comments = self.list_comments(number).await?;
+            let comments = self.list_comments(pr).await?;
             let content = format!("{}{}", content.into(), COMMENT_MARKER);
 
             if let Some(old) = comments
@@ -210,7 +210,7 @@ pub trait GitHubAdapter {
                 return self.update_issue_comment(old.id(), content).await;
             }
 
-            return self.post_comment(number, content).await;
+            return self.post_comment(pr, content).await;
         }
     }
 
@@ -323,22 +323,25 @@ impl GitHubAdapter for &mut GitHub {
     where
         I: IntoIterator<Item = Option<u64>>,
     {
-        let pull_requests = numbers.into_iter().map(|number| {
-            let gh = self.clone();
-            tokio::spawn(async move {
-                match number {
-                    Some(number) => {
-                        let octo_pr = gh
-                            .crab
-                            .pulls(gh.config.owner.clone(), gh.config.repo.clone())
-                            .get(number)
-                            .await;
-                        octo_pr.map(|v| Some(v))
+        let pull_requests: Vec<_> = numbers
+            .into_iter()
+            .map(|number| {
+                let gh = self.clone();
+                tokio::spawn(async move {
+                    match number {
+                        Some(number) => {
+                            let octo_pr = gh
+                                .crab
+                                .pulls(gh.config.owner.clone(), gh.config.repo.clone())
+                                .get(number)
+                                .await;
+                            octo_pr.map(|v| Some(v))
+                        }
+                        None => Ok(None),
                     }
-                    None => Ok(None),
-                }
+                })
             })
-        });
+            .collect();
 
         let mut ret = Vec::new();
         for pr in pull_requests {
@@ -498,17 +501,16 @@ impl GitHubAdapter for &mut GitHub {
         return Ok(());
     }
 
-    async fn post_comment<C>(&mut self, number: u64, content: C) -> crate::error::Result<()>
+    async fn post_comment<C>(
+        &mut self,
+        octo_pr: &Self::PRAdapter,
+        content: C,
+    ) -> crate::error::Result<()>
     where
         C: Into<String>,
     {
-        let octo_pr = self
-            .crab
-            .pulls(self.config.owner.clone(), self.config.repo.clone())
-            .get(number)
-            .await?;
         let variables = add_comment::Variables {
-            pull_request_id: octo_pr.node_id.ok_or_else(|| {
+            pull_request_id: octo_pr.node_id.clone().ok_or_else(|| {
                 crate::error::Error::new(format!(
                     "PR {} does not have a node-id? Not sure how to handle that.",
                     octo_pr.url,
@@ -529,11 +531,14 @@ impl GitHubAdapter for &mut GitHub {
         Ok(())
     }
 
-    async fn list_comments(&self, number: u64) -> crate::error::Result<Vec<Self::PRComment>> {
+    async fn list_comments(
+        &self,
+        pr: &Self::PRAdapter,
+    ) -> crate::error::Result<Vec<Self::PRComment>> {
         let variables = old_comments::Variables {
             owner: self.config.owner.clone(),
             name: self.config.repo.clone(),
-            number: number as i64,
+            number: pr.number as i64,
         };
 
         let resp: graphql_client::Response<old_comments::ResponseData> = self
@@ -549,24 +554,32 @@ impl GitHubAdapter for &mut GitHub {
         let comments = resp
             .data
             .ok_or_else(|| {
-                crate::error::Error::new(format!("No data on OldComments request for {number}"))
+                crate::error::Error::new(format!(
+                    "No data on OldComments request for {}",
+                    pr.pr_number()
+                ))
             })?
             .repository
             .ok_or_else(|| {
                 crate::error::Error::new(format!(
-                    "No repository on OldComments request for {number}"
+                    "No repository on OldComments request for {}",
+                    pr.pr_number()
                 ))
             })?
             .pull_request
             .ok_or_else(|| {
                 crate::error::Error::new(format!(
-                    "No pullRequest on OldComments request for {number}"
+                    "No pullRequest on OldComments request for {}",
+                    pr.pr_number()
                 ))
             })?
             .comments
             .nodes
             .ok_or_else(|| {
-                crate::error::Error::new(format!("No comments on OldComments request for {number}"))
+                crate::error::Error::new(format!(
+                    "No comments on OldComments request for {}",
+                    pr.pr_number()
+                ))
             })?
             .into_iter()
             .filter_map(|c| c)
@@ -586,7 +599,9 @@ impl GitHubAdapter for &mut GitHub {
             .await?;
 
         let variables = update_pr_base::Variables {
-            pull_request_id: octo_pr.node_id.ok_or_else(|| crate::error::Error::new("Couldn't find id for PR"))?,
+            pull_request_id: octo_pr
+                .node_id
+                .ok_or_else(|| crate::error::Error::new("Couldn't find id for PR"))?,
             branch: new_base.into(),
         };
 
@@ -678,7 +693,9 @@ pub mod fakes {
 
     impl GitHub {
         pub fn new() -> Self {
-            Self { pull_requests: std::collections::BTreeMap::new() }
+            Self {
+                pull_requests: std::collections::BTreeMap::new(),
+            }
         }
     }
 
@@ -787,27 +804,34 @@ pub mod fakes {
             Ok(())
         }
 
-        async fn list_comments(&self, number: u64) -> crate::error::Result<Vec<Self::PRComment>> {
+        async fn list_comments(
+            &self,
+            pr: &Self::PRAdapter,
+        ) -> crate::error::Result<Vec<Self::PRComment>> {
             Ok(self
                 .pull_requests
-                .get(&number)
+                .get(&pr.number)
                 .ok_or_else(|| crate::error::Error::new("No such PR"))?
                 .comments
                 .clone())
         }
 
-        async fn post_comment<C>(&mut self, number: u64, content: C) -> crate::error::Result<()>
+        async fn post_comment<C>(
+            &mut self,
+            pr: &Self::PRAdapter,
+            content: C,
+        ) -> crate::error::Result<()>
         where
             C: Into<String>,
         {
             let pr = self
                 .pull_requests
-                .get_mut(&number)
+                .get_mut(&pr.number)
                 .ok_or_else(|| crate::error::Error::new("No such PR"))?;
 
             pr.comments.push(PullRequestComment {
                 content: content.into(),
-                id: format!("{}-{}", number, pr.comments.len()),
+                id: format!("{}-{}", pr.number, pr.comments.len()),
                 editable: true,
             });
 
