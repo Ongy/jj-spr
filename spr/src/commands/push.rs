@@ -121,7 +121,7 @@ async fn do_push_single<'a, PR, H: AsRef<str>>(
     base_ref: &crate::jj::RevSet,
     head_branch: H,
     ws: &mut WorkSet<'a, PR>,
-) -> Result<()> {
+) -> Result<Oid> {
     ws.progress_bar.set_message("Building new commit");
     let base_oid = jj
         .resolve_revision_to_commit_id(base_ref.as_ref())
@@ -162,7 +162,7 @@ async fn do_push_single<'a, PR, H: AsRef<str>>(
 
     if target_tree == head_tree && base_base == base_oid {
         ws.progress_bar.set_message("Git is already up to date");
-        return Ok(());
+        return Ok(head_oid);
     }
 
     if !opts.force
@@ -238,22 +238,6 @@ async fn do_push_single<'a, PR, H: AsRef<str>>(
     ws.revision
         .message
         .insert(MessageSection::LastCommit, pr_commit.clone().to_string());
-    let mut cmd = tokio::process::Command::new("git");
-    cmd.arg("-C")
-        .arg(jj.git_repo.path())
-        .arg("push")
-        .arg("--atomic")
-        .arg("--no-verify")
-        .arg("--")
-        .arg(&config.remote_name)
-        .arg(format!("{}:refs/heads/{}", pr_commit, head_branch.as_ref()));
-
-    run_command(&mut cmd)
-        .await
-        .reword("git push failed".to_string())?;
-    // Looks like the above activity makes the change immutable.
-    // So we don't have to (and cannot) abandon it here.
-    jj.update()?;
 
     ws.progress_bar.set_message(if parents.len() == 1 {
         format!("Updated")
@@ -267,7 +251,7 @@ async fn do_push_single<'a, PR, H: AsRef<str>>(
         ws.work_done.push(WorkEvent::Rebased(config));
     }
 
-    Ok(())
+    Ok(pr_commit)
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +259,7 @@ struct BranchAction<PR> {
     head_branch: String,
     base_branch: String,
     old_pr: Option<PR>,
+    last_commit: Oid,
 }
 
 async fn do_push<'a, I, PR>(
@@ -307,28 +292,27 @@ where
                 .unwrap_or("");
             config.get_new_branch_name(&jj.get_all_ref_names()?, title)
         };
-        let base_branch = if let Some(ba) = seen
+        let (base_branch, base_ref) = if let Some(ba) = seen
             .iter()
             .find(|ba| ba.revision.id == ws.revision.parent_ids[0])
         {
-            Some(ba.pull_request.head_branch.clone())
+            let commit = jj
+                .git_repo
+                .find_commit(ba.pull_request.last_commit.clone())
+                .context(String::from("Find commit to base on"))?;
+
+            (
+                Some(ba.pull_request.head_branch.clone()),
+                RevSet::from(&commit),
+            )
         } else {
-            None
+            (
+                None,
+                trunk_head.fork_point(&crate::jj::RevSet::from(&ws.revision.id)),
+            )
         };
 
-        let base_ref = if let Some(base_branch) = base_branch.as_ref()
-            && *base_branch != config.master_ref
-        {
-            let branch = jj.git_repo.find_branch(
-                format!("{}/{}", config.remote_name, base_branch).as_str(),
-                git2::BranchType::Remote,
-            )?;
-            RevSet::from_remote_branch(&branch, &config.remote_name)?
-        } else {
-            trunk_head.fork_point(&crate::jj::RevSet::from(&ws.revision.id))
-        };
-
-        do_push_single(jj, config, opts, &base_ref, &head_ref, &mut ws)
+        let last_commit = do_push_single(jj, config, opts, &base_ref, &head_ref, &mut ws)
             .await
             .map_err(|mut err| {
                 err.push("do_push_single".into());
@@ -340,8 +324,31 @@ where
             head_branch: head_ref,
             base_branch: owned_base,
             old_pr: pr,
+            last_commit,
         }));
     }
+
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.arg("-C")
+        .arg(jj.git_repo.path())
+        .arg("push")
+        .arg("--atomic")
+        .arg("--no-verify")
+        .arg("--")
+        .arg(&config.remote_name);
+
+    for ws in seen.iter() {
+        cmd.arg(format!(
+            "{}:refs/heads/{}",
+            ws.pull_request.last_commit, ws.pull_request.head_branch
+        ));
+    }
+
+    run_command(&mut cmd)
+        .await
+        .context(String::from("git push failed"))?;
+    jj.update()?;
+
     Ok(seen)
 }
 
