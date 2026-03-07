@@ -103,4 +103,3 @@ impl Default for Icons {
         serde_json::from_str("{}").expect("Icons should be defaultable via serde")
     }
 }
-
