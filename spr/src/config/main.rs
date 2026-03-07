@@ -16,6 +16,8 @@ struct ParseConfig {
     drawing: super::drawing::Drawing,
     #[serde(default)]
     icons: super::icons::Icons,
+    #[serde(default)]
+    push: super::push::PushConfig,
 }
 
 // Both `jj config list` and `jj config get` return valid yaml.
@@ -37,6 +39,7 @@ pub struct Config {
 
     pub drawing: super::drawing::Drawing,
     pub icons: super::icons::Icons,
+    pub push: super::push::PushConfig,
 }
 
 impl Config {
@@ -48,6 +51,7 @@ impl Config {
         branch_prefix: String,
         drawing: super::drawing::Drawing,
         icons: super::icons::Icons,
+        push: super::push::PushConfig,
     ) -> Self {
         Self {
             owner,
@@ -57,6 +61,7 @@ impl Config {
             branch_prefix,
             drawing,
             icons,
+            push,
         }
     }
 
@@ -265,6 +270,7 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
         branch_prefix,
         parsed.drawing,
         parsed.icons,
+        parsed.push,
     ))
 }
 
