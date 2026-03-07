@@ -776,6 +776,11 @@ impl Jujutsu {
 
         Ok(output.trim() == "true")
     }
+
+    pub fn fix(&mut self, source: &RevSet) -> Result<()> {
+        self.run_captured_with_args(["fix", source.as_ref()])
+            .map(|_| {})
+    }
 }
 
 fn get_jj_bin() -> PathBuf {

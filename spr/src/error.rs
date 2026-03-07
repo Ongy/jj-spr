@@ -41,6 +41,14 @@ impl Error {
     }
 }
 
+impl From<toml::de::Error> for Error {
+    fn from(error: toml::de::Error) -> Self {
+        Self {
+            messages: vec![format!("{}", error)]
+        }
+    }
+}
+
 impl From<reqwest::header::InvalidHeaderValue> for Error {
     fn from(error: reqwest::header::InvalidHeaderValue) -> Self {
         Self {

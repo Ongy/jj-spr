@@ -19,6 +19,7 @@ pub struct Config {
 
     pub drawing: super::drawing::Drawing,
     pub icons: super::icons::Icons,
+    pub push: super::push::PushConfig,
 }
 
 impl Config {
@@ -30,6 +31,7 @@ impl Config {
         branch_prefix: String,
         drawing: super::drawing::Drawing,
         icons: super::icons::Icons,
+        push: super::push::PushConfig,
     ) -> Self {
         Self {
             owner,
@@ -39,6 +41,7 @@ impl Config {
             branch_prefix,
             drawing,
             icons,
+            push,
         }
     }
 
@@ -230,6 +233,7 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
     let (repo, owner) = repo_and_owner_from_jj(jj, remote_name.as_ref())?;
     let drawing = super::drawing::from_jj(jj)?;
     let icons = super::icons::from_jj(jj)?;
+    let push = super::push::from_jj(jj)?;
 
     Ok(Config::new(
         owner,
@@ -239,6 +243,7 @@ pub async fn from_jj<F: AsyncFnOnce() -> Result<String>>(
         branch_prefix,
         drawing,
         icons,
+        push,
     ))
 }
 
