@@ -660,10 +660,21 @@ impl Jujutsu {
             .map(|_| {})
     }
 
+    pub fn rebase(&mut self, revset: &RevSet, target: &RevSet) -> Result<()> {
+        self.run_captured_with_args([
+            "rebase",
+            "--source",
+            revset.as_ref(),
+            "--destination",
+            target.as_ref(),
+        ])
+        .map(|_| {})
+    }
+
     pub fn rebase_branch(&mut self, revset: &RevSet, target: ChangeId) -> Result<()> {
         self.run_captured_with_args([
             "rebase",
-            "-b",
+            "--branch",
             revset.as_ref(),
             "--destination",
             target.as_ref(),
