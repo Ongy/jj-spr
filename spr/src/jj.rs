@@ -778,7 +778,7 @@ impl Jujutsu {
     }
 
     pub fn fix(&mut self, source: &RevSet) -> Result<()> {
-        self.run_captured_with_args(["fix", source.as_ref()])
+        self.run_captured_with_args(["fix", "--source", source.as_ref()])
             .map(|_| {})
     }
 }

@@ -44,7 +44,7 @@ impl Error {
 impl From<toml::de::Error> for Error {
     fn from(error: toml::de::Error) -> Self {
         Self {
-            messages: vec![format!("{}", error)]
+            messages: vec![format!("{}", error)],
         }
     }
 }
