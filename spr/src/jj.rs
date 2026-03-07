@@ -46,6 +46,12 @@ pub struct Revision {
     pub bookmarks: Vec<String>,
 }
 
+impl AsRef<Revision> for Revision {
+    fn as_ref(&self) -> &Revision {
+        self
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PreparedCommit {
     pub oid: Oid,
