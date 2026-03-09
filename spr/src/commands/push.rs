@@ -528,6 +528,22 @@ where
         })
         .collect();
 
+    {
+        let mut seen = Vec::new();
+        for pr_num in workset
+            .iter()
+            .filter_map(|r| r.revision.pull_request_number)
+        {
+            if seen.contains(&pr_num) {
+                return Err(crate::error::Error::new(
+                    format!("Found PR {pr_num} in more than one revision").as_str(),
+                ));
+            } else {
+                seen.push(pr_num);
+            }
+        }
+    }
+
     let pull_requests = gh
         .pull_requests(workset.iter().map(|ws| ws.revision.pull_request_number))
         .await?;
@@ -1638,6 +1654,48 @@ pub mod tests {
             )
             .await
             .expect_err("Stacked should refuse to handle change with conflicts");
+        }
+
+        #[tokio::test]
+        async fn multi_pr_reference() {
+            let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.new_revision(
+                Some(RevSet::root()),
+                Some(format!(
+                    "Left\nPull Request: {}",
+                    testing::config::basic().pull_request_url(1)
+                )),
+                false,
+            )
+            .expect("Failed to create left revision");
+            let left = jj
+                .revset_to_change_id(&RevSet::current())
+                .expect("Failed to resolve left change id");
+            jj.new_revision(
+                Some(RevSet::root()),
+                Some(format!(
+                    "Right\nPull Request: {}",
+                    testing::config::basic().pull_request_url(1)
+                )),
+                false,
+            )
+            .expect("Failed to create left revision");
+            let right = jj
+                .revset_to_change_id(&RevSet::current())
+                .expect("Failed to resolve left change id");
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default().with_message(Some("message")).with_revset(Some(crate::jj::RevSet::from(&left).or(&crate::jj::RevSet::from(&right)).as_ref())),
+            )
+            .await
+            .expect_err("Stacked should refuse to handle revset with multiple revisions pointing at same PR");
         }
     }
 
