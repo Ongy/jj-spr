@@ -23,6 +23,9 @@ pub struct PushOptions {
 
     #[clap(long, short = 'f')]
     force: bool,
+
+    #[clap(long)]
+    fix: Option<bool>,
 }
 
 #[cfg(test)]
@@ -485,9 +488,15 @@ where
     let revset = heads
         .ancestors()
         .without(&RevSet::immutable().or(&RevSet::description("exact:\"\"")));
+    if opts.fix.unwrap_or(config.push.autofix) {
+        setup.set_message("Running jj fix");
+        jj.fix(&revset)?;
+    }
+
+    setup.set_message("Reading revisions");
     let revisions = jj.read_revision_range(config, &revset)?;
 
-    setup.set_message(format!("Validating revisions are ready"));
+    setup.set_message("Checking revisions for bad states");
     let blockers = jj.revset_to_change_ids(
         &revset.and(
             &RevSet::conflicts()
