@@ -654,15 +654,6 @@ where
         }
 
         let pull_request_url = config.pull_request_url(pr.pr_number());
-        crate::output::output(
-            &config.icons.sparkle,
-            &format!(
-                "Created new Pull Request #{}: {}",
-                pr.pr_number(),
-                &pull_request_url,
-            ),
-        )?;
-
         workset
             .progress_bar
             .set_message("Updating revisions description");
