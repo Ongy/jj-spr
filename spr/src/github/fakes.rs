@@ -1,3 +1,6 @@
+pub use super::types::PullRequest;
+pub use super::types::PullRequestComment;
+
 impl super::types::PullRequest {
     pub fn new<Ba, H, T, Bo>(base: Ba, head: H, number: u64, title: T, body: Bo) -> Self
     where

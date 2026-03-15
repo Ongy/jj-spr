@@ -1841,7 +1841,7 @@ pub mod tests {
                 .pull_requests
                 .get(&1)
                 .expect("Push must have created PR")
-                .reviewers
+                ._reviewers
                 .iter()
                 .map(|s| s.as_str())
                 .collect();
@@ -1897,7 +1897,7 @@ pub mod tests {
                 .pull_requests
                 .get(&1)
                 .expect("Push must have created PR")
-                .assignees
+                ._assignees
                 .iter()
                 .map(|s| s.as_str())
                 .collect();
