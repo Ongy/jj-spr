@@ -244,9 +244,6 @@ async fn do_push_single<'a, PR, H: AsRef<str>>(
     let pr_commit = jj.resolve_revision_to_commit_id(RevSet::from(&change).as_ref())?;
 
     ws.progress_bar.set_message("Pushing to GitHub");
-    ws.revision
-        .message
-        .insert(MessageSection::LastCommit, pr_commit.clone().to_string());
 
     ws.progress_bar.set_message(if parents.len() == 1 {
         format!("Updated")
@@ -337,26 +334,45 @@ where
         }));
     }
 
-    let mut cmd = tokio::process::Command::new("git");
-    cmd.arg("-C")
-        .arg(jj.git_repo.path())
-        .arg("push")
-        .arg("--atomic")
-        .arg("--no-verify")
-        .arg("--")
-        .arg(&config.remote_name);
+    let updates: Vec<String> = seen
+        .iter()
+        .filter_map(|ws| {
+            if let Some(lc) = ws.revision.message.get(&MessageSection::LastCommit)
+                && *lc == ws.pull_request.last_commit.to_string()
+            {
+                None
+            } else {
+                Some(format!(
+                    "{}:refs/heads/{}",
+                    ws.pull_request.last_commit, ws.pull_request.head_branch
+                ))
+            }
+        })
+        .collect();
 
-    for ws in seen.iter() {
-        cmd.arg(format!(
-            "{}:refs/heads/{}",
-            ws.pull_request.last_commit, ws.pull_request.head_branch
-        ));
+    if !updates.is_empty() {
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.arg("-C")
+            .arg(jj.git_repo.path())
+            .arg("push")
+            .arg("--atomic")
+            .arg("--no-verify")
+            .arg("--")
+            .arg(&config.remote_name);
+        cmd.args(updates);
+
+        run_command(&mut cmd)
+            .await
+            .context(String::from("git push failed"))?;
+        jj.update()?;
+
+        for ws in seen.iter_mut() {
+            ws.revision.message.insert(
+                MessageSection::LastCommit,
+                ws.pull_request.last_commit.to_string(),
+            );
+        }
     }
-
-    run_command(&mut cmd)
-        .await
-        .context(String::from("git push failed"))?;
-    jj.update()?;
 
     Ok(seen)
 }
