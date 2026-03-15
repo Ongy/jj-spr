@@ -10,18 +10,13 @@ use lazy_regex::regex;
 
 use crate::{
     config::{AuthTokenSource, get_auth_token_with_source},
-    error::{Error, Result, ResultExt},
+    error::{Error, Result},
 };
 
 pub async fn init() -> Result<()> {
     let path = std::env::current_dir()?;
-    let repo = git2::Repository::discover(path.clone()).reword(formatdoc!(
-        "Could not open a Git repository in {:?}. Please run 'spr' from within \
-         a Git repository.",
-        path
-    ))?;
-    let config = repo.config()?;
-    let mut jj = crate::jj::Jujutsu::new(repo)?;
+    let mut jj = crate::jj::Jujutsu::new(path)?;
+    let config = jj.git_repo.config()?;
     let icons = crate::config::icons::Icons::default();
 
     crate::output::output(&icons.wave, "Welcome to spr!")?;

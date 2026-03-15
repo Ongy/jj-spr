@@ -79,28 +79,9 @@ pub async fn spr() -> Result<()> {
     // Discover the Jujutsu repository and get the colocated Git repo
     let current_dir =
         std::env::current_dir().context(format!("Failed to find the working directory"))?;
-    let repo = git2::Repository::discover(&current_dir).context(format!(
-        "Failed to find git repo in {}",
-        current_dir.as_path().to_string_lossy()
-    ))?;
-
-    // Verify this is a Jujutsu repository by checking for .jj directory
-    let repo_path = repo
-        .workdir()
-        .ok_or_else(|| Error::new("Repository must have a working directory".to_string()))?
-        .to_path_buf();
-
-    let jj_dir = repo_path.join(".jj");
-    if !jj_dir.exists() {
-        return Err(Error::new(
-            "This command requires a Jujutsu repository. Run 'jj git init --colocate' to create one.".to_string()
-        ));
-    }
-
-    let git_config = repo.config()?;
-
-    let mut jj = jj_spr::jj::Jujutsu::new(repo)
+    let mut jj = jj_spr::jj::Jujutsu::new(current_dir)
         .context("could not initialize Jujutsu backend".to_owned())?;
+    let git_config = jj.git_repo.config()?;
 
     let github_auth_token = match cli.github_auth_token {
         Some(v) => v,
