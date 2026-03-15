@@ -260,7 +260,7 @@ impl GHPullRequest for octocrab::models::pulls::PullRequest {
     }
 }
 
-impl GithubPRComment for old_comments::OldCommentsRepositoryPullRequestCommentsNodes {
+impl GithubPRComment for old_comments::PrCommentsNodes {
     fn editable(&self) -> bool {
         self.viewer_can_update
     }
@@ -276,7 +276,7 @@ impl GithubPRComment for old_comments::OldCommentsRepositoryPullRequestCommentsN
 
 impl GitHubAdapter for &mut GitHub {
     type PRAdapter = octocrab::models::pulls::PullRequest;
-    type PRComment = old_comments::OldCommentsRepositoryPullRequestCommentsNodes;
+    type PRComment = old_comments::PrCommentsNodes;
 
     async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
         let octo_pr = self
