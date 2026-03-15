@@ -52,6 +52,20 @@ query OldComments(
   }
 }
 
+query ByHead(
+  $name: String!
+  $owner: String!
+  $head: String!
+) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $head) {
+      nodes {
+        ...PR
+      }
+    }
+  }
+}
+
 mutation UpdatePRBase($pull_request_id: ID!, $branch: String!) {
   updatePullRequest(input: {pullRequestId: $pull_request_id, baseRefName: $branch}) {
     clientMutationId
