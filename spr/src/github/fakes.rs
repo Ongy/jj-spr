@@ -39,6 +39,8 @@ impl PullRequest {
 }
 
 impl super::GHPullRequest for PullRequest {
+    type PRComment = PullRequestComment;
+
     fn head_branch_name(&self) -> &str {
         self.head.as_ref()
     }
@@ -61,6 +63,10 @@ impl super::GHPullRequest for PullRequest {
 
     fn closed(&self) -> bool {
         false
+    }
+
+    fn comments(&self) -> Vec<Self::PRComment> {
+        self.comments.clone()
     }
 }
 
@@ -93,7 +99,6 @@ impl super::GithubPRComment for PullRequestComment {
 
 impl super::GitHubAdapter for &mut GitHub {
     type PRAdapter = PullRequest;
-    type PRComment = PullRequestComment;
 
     async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
         self.pull_requests
@@ -177,18 +182,6 @@ impl super::GitHubAdapter for &mut GitHub {
             pr.assignees.extend(assignees.into_iter().map(|s| s.into()));
         }
         Ok(())
-    }
-
-    async fn list_comments(
-        &self,
-        pr: &Self::PRAdapter,
-    ) -> crate::error::Result<Vec<Self::PRComment>> {
-        Ok(self
-            .pull_requests
-            .get(&pr.number)
-            .ok_or_else(|| crate::error::Error::new("No such PR"))?
-            .comments
-            .clone())
     }
 
     async fn post_comment<C>(
