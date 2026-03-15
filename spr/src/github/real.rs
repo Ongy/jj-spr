@@ -13,7 +13,7 @@ pub struct GitHub {
     crab: octocrab::Octocrab,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PullRequestComment {
     content: String,
     id: String,
@@ -30,7 +30,7 @@ pub struct PullRequest {
     body: String,
     _reviewers: Vec<String>,
     _assignees: Vec<String>,
-    _comments: Vec<PullRequestComment>,
+    comments: Vec<PullRequestComment>,
     closed: bool,
 }
 
@@ -93,7 +93,7 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for PullRequest {
             closed: pr.closed,
             _reviewers: reviewers,
             _assignees: assignees,
-            _comments: comments,
+            comments,
         }
     }
 }
@@ -124,6 +124,8 @@ impl super::GithubPRComment for PullRequestComment {
 }
 
 impl super::GHPullRequest for PullRequest {
+    type PRComment = PullRequestComment;
+
     fn head_branch_name(&self) -> &str {
         self.head.as_ref()
     }
@@ -147,6 +149,10 @@ impl super::GHPullRequest for PullRequest {
     fn closed(&self) -> bool {
         self.closed
     }
+
+    fn comments(&self) -> Vec<Self::PRComment> {
+        self.comments.clone()
+    }
 }
 
 impl GitHub {
@@ -157,7 +163,6 @@ impl GitHub {
 
 impl super::GitHubAdapter for &mut GitHub {
     type PRAdapter = PullRequest;
-    type PRComment = PullRequestComment;
 
     async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
         let variables = old_comments::Variables {
@@ -298,7 +303,7 @@ impl super::GitHubAdapter for &mut GitHub {
             body: octo_pr.body.unwrap_or(String::new()),
             _reviewers: Vec::new(),
             _assignees: Vec::new(),
-            _comments: Vec::new(),
+            comments: Vec::new(),
             closed: false,
         })
     }
@@ -452,69 +457,6 @@ impl super::GitHubAdapter for &mut GitHub {
             return Err(crate::error::Error::new(format!("{:?}", errs)));
         }
         Ok(())
-    }
-
-    async fn list_comments(
-        &self,
-        pr: &Self::PRAdapter,
-    ) -> crate::error::Result<Vec<Self::PRComment>> {
-        let variables = old_comments::Variables {
-            owner: self.config.owner.clone(),
-            name: self.config.repo.clone(),
-            number: pr.number as i64,
-        };
-
-        let resp: graphql_client::Response<old_comments::ResponseData> = self
-            .crab
-            .graphql(&OldComments::build_query(variables))
-            .await?;
-        if let Some(errs) = resp.errors
-            && !errs.is_empty()
-        {
-            return Err(crate::error::Error::new(format!("{:?}", errs)));
-        }
-
-        let comments = resp
-            .data
-            .ok_or_else(|| {
-                crate::error::Error::new(format!(
-                    "No data on OldComments request for {}",
-                    pr.number
-                ))
-            })?
-            .repository
-            .ok_or_else(|| {
-                crate::error::Error::new(format!(
-                    "No repository on OldComments request for {}",
-                    pr.number
-                ))
-            })?
-            .pull_request
-            .ok_or_else(|| {
-                crate::error::Error::new(format!(
-                    "No pullRequest on OldComments request for {}",
-                    pr.number
-                ))
-            })?
-            .comments
-            .nodes
-            .ok_or_else(|| {
-                crate::error::Error::new(format!(
-                    "No comments on OldComments request for {}",
-                    pr.number
-                ))
-            })?
-            .into_iter()
-            .filter_map(|c| {
-                c.map(|comment| PullRequestComment {
-                    editable: comment.viewer_can_update,
-                    content: comment.body,
-                    id: comment.id,
-                })
-            })
-            .collect();
-
-        Ok(comments)
     }
 
     async fn rebase_pr<S>(&mut self, number: u64, new_base: S) -> crate::error::Result<()>
