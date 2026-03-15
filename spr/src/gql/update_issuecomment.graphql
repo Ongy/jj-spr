@@ -10,6 +10,36 @@ mutation AddComment($pull_request_id: ID!, $body: String!) {
   }
 }
 
+fragment PR on PullRequest {
+  id
+  number
+  body
+  title
+  baseRefName
+  headRefName
+  closed
+  merged
+  comments(first: 100) {
+    nodes {
+      body
+      id
+      viewerCanUpdate
+    }
+  }
+  assignees(first: 100) {
+    nodes {
+      id
+      login
+    }
+  }
+  # We don't quite know yet how to handle these. So only get one
+  reviewRequests(first: 1) {
+    nodes {
+      id
+    }
+  }
+}
+
 query OldComments(
   $name: String!
   $owner: String!
@@ -17,13 +47,7 @@ query OldComments(
 ) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      comments(first: 100) {
-        nodes {
-          body
-          id
-          viewerCanUpdate
-        }
-      }
+      ...PR
     }
   }
 }
