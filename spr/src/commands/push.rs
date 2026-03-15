@@ -361,13 +361,10 @@ where
             .arg(&config.remote_name);
         cmd.args(updates);
 
-        crate::timing::time_async("run push command", async || {
-            run_command(&mut cmd)
-                .await
-                .context(String::from("git push failed"))
-        })
-        .await?;
-        crate::timing::time("jj update", || jj.update())?;
+        run_command(&mut cmd)
+            .await
+            .context(String::from("git push failed"))?;
+        jj.update()?;
 
         for ws in seen.iter_mut() {
             ws.revision.message.insert(
@@ -376,11 +373,6 @@ where
             );
         }
     }
-
-    run_command(&mut cmd)
-        .await
-        .context(String::from("git push failed"))?;
-    jj.update()?;
 
     Ok(seen)
 }
