@@ -8,6 +8,7 @@
 use std::{
     ffi::OsStr,
     fmt::Display,
+    os::unix::ffi::OsStrExt,
     path::PathBuf,
     process::{Command, Stdio},
 };
@@ -250,22 +251,35 @@ impl Jujutsu {
         })
     }
 
-    pub fn new(git_repo: git2::Repository) -> Result<Self> {
-        let repo_path = git_repo
-            .workdir()
-            .ok_or_else(|| Error::new("Repository must have a working directory".to_string()))?
-            .to_path_buf();
-
-        // Verify this is a Jujutsu repository
-        let jj_dir = repo_path.join(".jj");
-        if !jj_dir.exists() {
-            return Err(Error::new(
-                "This is not a Jujutsu repository. Run 'jj git init --colocate' to create one."
-                    .to_string(),
-            ));
-        }
-
+    pub fn new<P>(path: P) -> Result<Self>
+    where
+        P: AsRef<std::path::Path>,
+    {
         let jj_bin = get_jj_bin();
+
+        let git_repo = {
+            let git_root = Command::new(&jj_bin)
+                .current_dir(&path)
+                .args(["git", "root"])
+                .output()?;
+            if !git_root.status.success() {
+                return Err(crate::error::Error::new("Couldn't find jj git root"));
+            }
+            let git_root = std::path::PathBuf::from(OsStr::from_bytes(
+                git_root.stdout.as_slice().trim_ascii(),
+            ));
+            git2::Repository::open(git_root)
+        }?;
+
+        let repo_path = Command::new(&jj_bin)
+            .current_dir(&path)
+            .args(["workspace", "root"])
+            .output()?;
+        if !repo_path.status.success() {
+            return Err(crate::error::Error::new("Couldn't find jj workspace root"));
+        }
+        let repo_path =
+            std::path::PathBuf::from(OsStr::from_bytes(repo_path.stdout.as_slice().trim_ascii()));
 
         Ok(Self {
             repo_path,
@@ -590,7 +604,11 @@ impl Jujutsu {
             "--into",
             onto.id.as_str(),
             "--from",
-            format!("description(substring:\"jj-spr-duplicate-for-{}\")", onto.id).as_str(),
+            format!(
+                "description(substring:\"jj-spr-duplicate-for-{}\")",
+                onto.id
+            )
+            .as_str(),
             "--use-destination-message",
         ])?;
 
@@ -810,39 +828,6 @@ mod tests {
 
     use super::*;
     use std::{fs, path::Path};
-    use tempfile::TempDir;
-
-    fn create_jujutsu_test_repo() -> (TempDir, PathBuf) {
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let repo_path = temp_dir.path().to_path_buf();
-
-        // Initialize a Jujutsu repository
-        let output = std::process::Command::new("jj")
-            .args(["git", "init", "--colocate"])
-            .current_dir(&repo_path)
-            .output()
-            .expect("Failed to run jj git init");
-
-        if !output.status.success() {
-            panic!(
-                "Failed to initialize jj repo: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        // Set up basic jj config
-        let _ = std::process::Command::new("jj")
-            .args(["config", "set", "--repo", "user.name", "Test User"])
-            .current_dir(&repo_path)
-            .output();
-
-        let _ = std::process::Command::new("jj")
-            .args(["config", "set", "--repo", "user.email", "test@example.com"])
-            .current_dir(&repo_path)
-            .output();
-
-        (temp_dir, repo_path)
-    }
 
     fn create_jujutsu_commit(repo_path: &Path, message: &str, file_content: &str) -> String {
         // Create a file
@@ -932,10 +917,7 @@ mod tests {
 
     #[test]
     fn test_jujutsu_creation() {
-        let (_temp_dir, repo_path) = create_jujutsu_test_repo();
-        let git_repo = git2::Repository::open(&repo_path).expect("Failed to open git repository");
-
-        let jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
+        let (_temp_dr, jj, _) = testing::setup::repo_with_origin();
         assert!(jj.repo_path.exists());
         assert!(jj.repo_path.join(".jj").exists());
     }
@@ -943,22 +925,19 @@ mod tests {
     #[test]
     fn test_revision_reading() {
         let config = testing::config::basic();
-        let (_temp_dir, repo_path) = create_jujutsu_test_repo();
+        let (_temp_dr, jj, _) = testing::setup::repo_with_origin();
 
         // Create some commits
-        let _commit1 = create_jujutsu_commit(&repo_path, "First commit", "content1");
-        let commit2 = create_jujutsu_commit(&repo_path, "Second commit", "content2");
-        let commit3 = create_jujutsu_commit(&repo_path, "Third commit", "content3");
+        let _commit1 = create_jujutsu_commit(&jj.repo_path, "First commit", "content1");
+        let commit2 = create_jujutsu_commit(&jj.repo_path, "Second commit", "content2");
+        let commit3 = create_jujutsu_commit(&jj.repo_path, "Third commit", "content3");
 
         let commit4 = create_jujutsu_commit_from(
-            &repo_path,
+            &jj.repo_path,
             "Fourth commit",
             "content4",
             &[commit2.as_str(), commit3.as_str()],
         );
-
-        let git_repo = git2::Repository::open(&repo_path).expect("Failed to open git repository");
-        let jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
 
         let c1 = jj.read_revision(&config, ChangeId::from(commit2));
         assert!(c1.is_ok(), "Failed to read @ revision: {:?}", c1.err());
@@ -977,15 +956,12 @@ mod tests {
 
     #[test]
     fn test_revision_resolution() {
-        let (_temp_dir, repo_path) = create_jujutsu_test_repo();
+        let (_temp_dr, jj, _) = testing::setup::repo_with_origin();
         let config = testing::config::basic();
 
         // Create some commits
-        let _commit1 = create_jujutsu_commit(&repo_path, "First commit", "content1");
-        let _commit2 = create_jujutsu_commit(&repo_path, "Second commit", "content2");
-
-        let git_repo = git2::Repository::open(&repo_path).expect("Failed to open git repository");
-        let jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
+        let _commit1 = create_jujutsu_commit(&jj.repo_path, "First commit", "content1");
+        let _commit2 = create_jujutsu_commit(&jj.repo_path, "Second commit", "content2");
 
         // Test resolving current revision (@)
         let result = jj.get_prepared_commit_for_revision(&config, "@");
@@ -1006,16 +982,13 @@ mod tests {
 
     #[test]
     fn test_commit_range() {
-        let (_temp_dir, repo_path) = create_jujutsu_test_repo();
+        let (_temp_dr, jj, _) = testing::setup::repo_with_origin();
         let config = testing::config::basic();
 
         // Create multiple commits
-        let _commit1 = create_jujutsu_commit(&repo_path, "First commit", "content1");
-        let _commit2 = create_jujutsu_commit(&repo_path, "Second commit", "content2");
-        let _commit3 = create_jujutsu_commit(&repo_path, "Third commit", "content3");
-
-        let git_repo = git2::Repository::open(&repo_path).expect("Failed to open git repository");
-        let jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
+        let _commit1 = create_jujutsu_commit(&jj.repo_path, "First commit", "content1");
+        let _commit2 = create_jujutsu_commit(&jj.repo_path, "Second commit", "content2");
+        let _commit3 = create_jujutsu_commit(&jj.repo_path, "Third commit", "content3");
 
         // Test getting commit range
         let result = jj.get_prepared_commits_from_to(&config, "@----", "@-", false);
@@ -1054,10 +1027,7 @@ mod tests {
 
     #[test]
     fn test_status_check() {
-        let (_temp_dir, repo_path) = create_jujutsu_test_repo();
-
-        let git_repo = git2::Repository::open(&repo_path).expect("Failed to open git repository");
-        let mut jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
+        let (_temp_dr, mut jj, _) = testing::setup::repo_with_origin();
 
         // Should pass since new repo has no changes
         let result = jj.check_no_uncommitted_changes();
@@ -1070,13 +1040,10 @@ mod tests {
 
     #[test]
     fn test_derived_commit_has_different_timestamp() {
-        let (_temp_dir, repo_path) = create_jujutsu_test_repo();
+        let (_temp_dr, mut jj, _) = testing::setup::repo_with_origin();
 
         // Create a commit with some content
-        let _commit1 = create_jujutsu_commit(&repo_path, "Original commit", "original content");
-
-        let git_repo = git2::Repository::open(&repo_path).expect("Failed to open git repository");
-        let mut jj = Jujutsu::new(git_repo).expect("Failed to create Jujutsu instance");
+        let _commit1 = create_jujutsu_commit(&jj.repo_path, "Original commit", "original content");
 
         // Get the original commit
         let original_commit_oid = jj
@@ -1138,5 +1105,22 @@ mod tests {
             derived_committer_time.seconds() > original_committer_time.seconds(),
             "Derived commit committer timestamp should be newer than original"
         );
+    }
+
+    #[test]
+    fn jj_from_workspace() {
+        let (temp_dr, jj, _) = testing::setup::repo_with_origin();
+        let workspace_path = temp_dr.path().join("workspace");
+
+        std::process::Command::new("jj")
+            .current_dir(jj.repo_path)
+            .args([
+                "workspace",
+                "add",
+                String::from_utf8_lossy(workspace_path.as_os_str().as_encoded_bytes()).as_ref(),
+            ])
+            .status()
+            .expect("Should be able to create workspace");
+        super::Jujutsu::new(workspace_path).expect("Expect to be able to create JJ from workspace");
     }
 }

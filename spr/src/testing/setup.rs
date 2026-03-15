@@ -91,8 +91,8 @@ pub fn repo_with_origin() -> (tempfile::TempDir, crate::jj::Jujutsu, git2::Repos
     let repo_path = temp_dir.path().join("clone");
 
     let bare = create_test_git_repo(bare_path.clone());
-    let repo = clone_repo(bare_path.clone(), repo_path.clone());
+    let _ = clone_repo(bare_path.clone(), repo_path.clone());
 
-    let jj = crate::jj::Jujutsu::new(repo).expect("Failed to create JJ object in cloned repo");
+    let jj = crate::jj::Jujutsu::new(repo_path).expect("Failed to create JJ object in cloned repo");
     return (temp_dir, jj, bare);
 }
