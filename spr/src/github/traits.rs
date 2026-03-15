@@ -6,9 +6,20 @@ pub trait GithubPRComment {
     fn id(&self) -> &str;
 }
 
-pub trait GitHubAdapter {
-    type PRAdapter: Send;
+pub trait GHPullRequest {
     type PRComment: GithubPRComment;
+
+    fn head_branch_name(&self) -> &str;
+    fn base_branch_name(&self) -> &str;
+    fn pr_number(&self) -> u64;
+    fn body(&self) -> &str;
+    fn title(&self) -> &str;
+    fn closed(&self) -> bool;
+    fn comments(&self) -> Vec<Self::PRComment>;
+}
+
+pub trait GitHubAdapter {
+    type PRAdapter: GHPullRequest + Send;
 
     fn pull_request(
         &mut self,
@@ -74,11 +85,6 @@ pub trait GitHubAdapter {
         S: Into<String>,
         I: IntoIterator<Item = S>;
 
-    fn list_comments(
-        &self,
-        pr: &Self::PRAdapter,
-    ) -> impl std::future::Future<Output = crate::error::Result<Vec<Self::PRComment>>>;
-
     fn post_comment<C>(
         &mut self,
         pr: &Self::PRAdapter,
@@ -105,7 +111,7 @@ pub trait GitHubAdapter {
         S: Into<String>,
     {
         async move {
-            let comments = self.list_comments(pr).await?;
+            let comments = pr.comments();
             let content = format!("{}{}", content.into(), COMMENT_MARKER);
 
             if let Some(old) = comments
@@ -130,13 +136,4 @@ pub trait GitHubAdapter {
     ) -> impl std::future::Future<Output = crate::error::Result<()>>
     where
         S: Into<String>;
-}
-
-pub trait GHPullRequest {
-    fn head_branch_name(&self) -> &str;
-    fn base_branch_name(&self) -> &str;
-    fn pr_number(&self) -> u64;
-    fn body(&self) -> &str;
-    fn title(&self) -> &str;
-    fn closed(&self) -> bool;
 }
