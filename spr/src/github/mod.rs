@@ -11,3 +11,4 @@ mod real;
 pub use real::GitHub;
 
 mod queries;
+mod types;
