@@ -13,6 +13,27 @@ pub struct GitHub {
     crab: octocrab::Octocrab,
 }
 
+#[derive(Debug)]
+pub struct PullRequestComment {
+    content: String,
+    id: String,
+    editable: bool,
+}
+
+#[derive(Debug)]
+pub struct PullRequest {
+    base: String,
+    head: String,
+    number: u64,
+    node: String,
+    title: String,
+    body: String,
+    _reviewers: Vec<String>,
+    _assignees: Vec<String>,
+    _comments: Vec<PullRequestComment>,
+    closed: bool,
+}
+
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "src/gql/schema.docs.graphql",
@@ -22,47 +43,79 @@ pub struct GitHub {
 )]
 pub struct OldComments;
 
-impl GitHub {
-    pub fn new(config: crate::config::Config, crab: octocrab::Octocrab) -> Self {
-        Self { config, crab }
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/gql/schema.docs.graphql",
+    query_path = "src/gql/update_issuecomment.graphql",
+    variables_derives = "Clone, Debug",
+    response_derives = "Clone, Debug"
+)]
+pub struct ByHead;
+
+impl From<old_comments::OldCommentsRepositoryPullRequest> for PullRequest {
+    fn from(pr: old_comments::PR) -> Self {
+        let assignees = pr
+            .assignees
+            .nodes
+            .unwrap_or(Vec::new())
+            .into_iter()
+            .filter_map(|node| node.map(|assignee| assignee.id))
+            .collect();
+        let reviewers = pr
+            .review_requests
+            .and_then(|r| r.nodes)
+            .unwrap_or(Vec::new())
+            .into_iter()
+            .filter_map(|node| node.map(|r| r.id))
+            .collect();
+
+        let comments = pr
+            .comments
+            .nodes
+            .unwrap_or(Vec::new())
+            .into_iter()
+            .filter_map(|node| {
+                node.map(|comment| PullRequestComment {
+                    editable: comment.viewer_can_update,
+                    content: comment.body,
+                    id: comment.id,
+                })
+            })
+            .collect();
+
+        Self {
+            base: pr.base_ref_name,
+            head: pr.head_ref_name,
+            number: pr.number as u64,
+            node: pr.id,
+            body: pr.body,
+            title: pr.title,
+            closed: pr.closed,
+            _reviewers: reviewers,
+            _assignees: assignees,
+            _comments: comments,
+        }
     }
 }
 
-impl super::GHPullRequest for octocrab::models::pulls::PullRequest {
-    fn head_branch_name(&self) -> &str {
-        self.head.ref_field.as_str()
-    }
-
-    fn base_branch_name(&self) -> &str {
-        self.base.ref_field.as_str()
-    }
-
-    fn pr_number(&self) -> u64 {
-        self.number
-    }
-
-    fn title(&self) -> &str {
-        self.title.as_ref().map_or("", |s| s.as_ref())
-    }
-
-    fn body(&self) -> &str {
-        self.body.as_ref().map_or("", |s| s.as_ref())
-    }
-
-    fn closed(&self) -> bool {
-        self.state
-            .as_ref()
-            .map_or(false, |s| s == &octocrab::models::IssueState::Closed)
+impl From<by_head::PR> for PullRequest {
+    fn from(pr: by_head::PR) -> Self {
+        unsafe {
+            // These types are generated from the same fragment in graphql.
+            // They should be exacly equal, but we'll see if this holds in practice.
+            let pr: old_comments::PR = std::mem::transmute(pr);
+            Self::from(pr)
+        }
     }
 }
 
-impl super::GithubPRComment for old_comments::PrCommentsNodes {
+impl super::GithubPRComment for PullRequestComment {
     fn editable(&self) -> bool {
-        self.viewer_can_update
+        self.editable
     }
 
     fn body(&self) -> &str {
-        self.body.as_ref()
+        self.content.as_ref()
     }
 
     fn id(&self) -> &str {
@@ -70,18 +123,68 @@ impl super::GithubPRComment for old_comments::PrCommentsNodes {
     }
 }
 
+impl super::GHPullRequest for PullRequest {
+    fn head_branch_name(&self) -> &str {
+        self.head.as_ref()
+    }
+
+    fn base_branch_name(&self) -> &str {
+        self.base.as_ref()
+    }
+
+    fn pr_number(&self) -> u64 {
+        self.number
+    }
+
+    fn body(&self) -> &str {
+        self.body.as_ref()
+    }
+
+    fn title(&self) -> &str {
+        self.title.as_ref()
+    }
+
+    fn closed(&self) -> bool {
+        self.closed
+    }
+}
+
+impl GitHub {
+    pub fn new(config: crate::config::Config, crab: octocrab::Octocrab) -> Self {
+        Self { config, crab }
+    }
+}
+
 impl super::GitHubAdapter for &mut GitHub {
-    type PRAdapter = octocrab::models::pulls::PullRequest;
-    type PRComment = old_comments::PrCommentsNodes;
+    type PRAdapter = PullRequest;
+    type PRComment = PullRequestComment;
 
     async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
-        let octo_pr = self
-            .crab
-            .pulls(self.config.owner.clone(), self.config.repo.clone())
-            .get(number)
-            .await?;
+        let variables = old_comments::Variables {
+            owner: self.config.owner.clone(),
+            name: self.config.repo.clone(),
+            number: number as i64,
+        };
 
-        Ok(octo_pr)
+        let resp: graphql_client::Response<old_comments::ResponseData> = self
+            .crab
+            .graphql(&OldComments::build_query(variables))
+            .await?;
+        if let Some(errs) = resp.errors
+            && !errs.is_empty()
+        {
+            return Err(crate::error::Error::new(format!("{:?}", errs)));
+        }
+
+        let pr = resp
+            .data
+            .ok_or_else(|| crate::error::Error::new("No data on PR request"))?
+            .repository
+            .ok_or_else(|| crate::error::Error::new("No repository in PR request"))?
+            .pull_request
+            .ok_or_else(|| crate::error::Error::new("No PR in PR request"))?;
+
+        Ok(PullRequest::from(pr))
     }
 
     async fn pull_request_by_head<S>(&mut self, head: S) -> crate::error::Result<Self::PRAdapter>
@@ -89,21 +192,38 @@ impl super::GitHubAdapter for &mut GitHub {
         S: Into<String>,
     {
         let head = head.into();
-        let octo_prs = self
-            .crab
-            .pulls(self.config.owner.clone(), self.config.repo.clone())
-            .list()
-            .base(head.clone())
-            .per_page(10)
-            .send()
-            .await?;
+        let variables = by_head::Variables {
+            owner: self.config.owner.clone(),
+            name: self.config.repo.clone(),
+            head: head.clone(),
+        };
 
-        if octo_prs.total_count.unwrap_or(0) > 1 {
+        let resp: graphql_client::Response<by_head::ResponseData> =
+            self.crab.graphql(&ByHead::build_query(variables)).await?;
+        if let Some(errs) = resp.errors
+            && !errs.is_empty()
+        {
+            return Err(crate::error::Error::new(format!("{:?}", errs)));
+        }
+
+        let prs: Vec<_> = resp
+            .data
+            .ok_or_else(|| crate::error::Error::new("No data on by_head request"))?
+            .repository
+            .ok_or_else(|| crate::error::Error::new("No repository in by_head request"))?
+            .pull_requests
+            .nodes
+            .ok_or_else(|| crate::error::Error::new("No nodes in pull_requests for by_head"))?
+            .into_iter()
+            .filter_map(|pr| pr)
+            .collect();
+
+        if prs.len() > 1 {
             return Err(crate::error::Error::new("Found more than one candidate PR"));
         }
 
-        if let Some(pr) = octo_prs.items.into_iter().next() {
-            Ok(pr)
+        if let Some(pr) = prs.into_iter().next() {
+            Ok(PullRequest::from(pr))
         } else {
             Err(crate::error::Error::new(format!(
                 "Couldn't find a PR for branch {}",
@@ -122,16 +242,13 @@ impl super::GitHubAdapter for &mut GitHub {
         let pull_requests: Vec<_> = numbers
             .into_iter()
             .map(|number| {
-                let gh = self.clone();
+                let mut gh = self.clone();
                 tokio::spawn(async move {
                     match number {
                         Some(number) => {
-                            let octo_pr = gh
-                                .crab
-                                .pulls(gh.config.owner.clone(), gh.config.repo.clone())
-                                .get(number)
-                                .await;
-                            octo_pr.map(|v| Some(v))
+                            let mut r = &mut gh;
+                            let pr = r.pull_request(number).await;
+                            pr.map(|v| Some(v))
                         }
                         None => Ok(None),
                     }
@@ -170,7 +287,20 @@ impl super::GitHubAdapter for &mut GitHub {
             .send()
             .await?;
 
-        Ok(octo_pr)
+        Ok(PullRequest {
+            node: octo_pr
+                .node_id
+                .ok_or_else(|| crate::error::Error::new("No nodeID on new PR"))?,
+            base: String::from(base_ref_name.as_ref()),
+            head: String::from(head_ref_name.as_ref()),
+            number: octo_pr.number,
+            title: octo_pr.title.unwrap_or(String::new()),
+            body: octo_pr.body.unwrap_or(String::new()),
+            _reviewers: Vec::new(),
+            _assignees: Vec::new(),
+            _comments: Vec::new(),
+            closed: false,
+        })
     }
 
     async fn add_reviewers<S, I>(
@@ -184,13 +314,7 @@ impl super::GitHubAdapter for &mut GitHub {
     {
         let reviewers = reviewers.into_iter().map(|s| s.into());
         let variables = super::queries::mutations::request_reviews::Variables {
-            pull_request_id: pr
-                .node_id
-                .as_ref()
-                .ok_or_else(|| {
-                    crate::error::Error::new(format!("PR {} does not have an node id.", pr.url))
-                })?
-                .to_string(),
+            pull_request_id: pr.node.clone(),
             users: Some(reviewers.collect()),
         };
 
@@ -255,13 +379,7 @@ impl super::GitHubAdapter for &mut GitHub {
 
         let variables = super::queries::mutations::add_assignees::Variables {
             assignees: assignee_ids,
-            assignable_id: pr
-                .node_id
-                .as_ref()
-                .ok_or_else(|| {
-                    crate::error::Error::new(format!("PR {} does not have an node id.", pr.url))
-                })?
-                .to_string(),
+            assignable_id: pr.node.clone(),
         };
 
         let resp: graphql_client::Response<super::queries::mutations::add_assignees::ResponseData> =
@@ -311,19 +429,14 @@ impl super::GitHubAdapter for &mut GitHub {
 
     async fn post_comment<C>(
         &mut self,
-        octo_pr: &Self::PRAdapter,
+        pr: &Self::PRAdapter,
         content: C,
     ) -> crate::error::Result<()>
     where
         C: Into<String>,
     {
         let variables = super::queries::mutations::add_comment::Variables {
-            pull_request_id: octo_pr.node_id.clone().ok_or_else(|| {
-                crate::error::Error::new(format!(
-                    "PR {} does not have a node-id? Not sure how to handle that.",
-                    octo_pr.url,
-                ))
-            })?,
+            pull_request_id: pr.node.clone(),
             body: content.into(),
         };
 
@@ -392,7 +505,13 @@ impl super::GitHubAdapter for &mut GitHub {
                 ))
             })?
             .into_iter()
-            .filter_map(|c| c)
+            .filter_map(|c| {
+                c.map(|comment| PullRequestComment {
+                    editable: comment.viewer_can_update,
+                    content: comment.body,
+                    id: comment.id,
+                })
+            })
             .collect();
 
         Ok(comments)
