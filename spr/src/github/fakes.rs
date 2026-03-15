@@ -1,23 +1,7 @@
-#[derive(Debug, Clone)]
-pub struct PullRequestComment {
-    pub content: String,
-    pub id: String,
-    pub editable: bool,
-}
+pub use super::types::PullRequest;
+pub use super::types::PullRequestComment;
 
-#[derive(Debug, Clone)]
-pub struct PullRequest {
-    pub base: String,
-    pub head: String,
-    pub number: u64,
-    pub title: String,
-    pub body: String,
-    pub reviewers: Vec<String>,
-    pub assignees: Vec<String>,
-    pub comments: Vec<PullRequestComment>,
-}
-
-impl PullRequest {
+impl super::types::PullRequest {
     pub fn new<Ba, H, T, Bo>(base: Ba, head: H, number: u64, title: T, body: Bo) -> Self
     where
         Ba: Into<String>,
@@ -25,54 +9,24 @@ impl PullRequest {
         T: Into<String>,
         Bo: Into<String>,
     {
-        PullRequest {
+        Self {
             base: base.into(),
             head: head.into(),
             number,
             title: title.into(),
             body: body.into(),
-            reviewers: Vec::new(),
-            assignees: Vec::new(),
+            _reviewers: Vec::new(),
+            _assignees: Vec::new(),
             comments: Vec::new(),
+            node: String::new(),
+            closed: false,
         }
-    }
-}
-
-impl super::GHPullRequest for PullRequest {
-    type PRComment = PullRequestComment;
-
-    fn head_branch_name(&self) -> &str {
-        self.head.as_ref()
-    }
-
-    fn base_branch_name(&self) -> &str {
-        self.base.as_ref()
-    }
-
-    fn pr_number(&self) -> u64 {
-        self.number
-    }
-
-    fn body(&self) -> &str {
-        self.body.as_str()
-    }
-
-    fn title(&self) -> &str {
-        self.title.as_str()
-    }
-
-    fn closed(&self) -> bool {
-        false
-    }
-
-    fn comments(&self) -> Vec<Self::PRComment> {
-        self.comments.clone()
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct GitHub {
-    pub pull_requests: std::collections::BTreeMap<u64, PullRequest>,
+    pub pull_requests: std::collections::BTreeMap<u64, super::types::PullRequest>,
 }
 
 impl GitHub {
@@ -83,22 +37,8 @@ impl GitHub {
     }
 }
 
-impl super::GithubPRComment for PullRequestComment {
-    fn editable(&self) -> bool {
-        self.editable
-    }
-
-    fn body(&self) -> &str {
-        self.content.as_ref()
-    }
-
-    fn id(&self) -> &str {
-        self.id.as_ref()
-    }
-}
-
 impl super::GitHubAdapter for &mut GitHub {
-    type PRAdapter = PullRequest;
+    type PRAdapter = super::types::PullRequest;
 
     async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
         self.pull_requests
@@ -164,7 +104,8 @@ impl super::GitHubAdapter for &mut GitHub {
         I: IntoIterator<Item = S>,
     {
         if let Some(pr) = self.pull_requests.get_mut(&pr.number) {
-            pr.reviewers.extend(reviewers.into_iter().map(|s| s.into()));
+            pr._reviewers
+                .extend(reviewers.into_iter().map(|s| s.into()));
         }
         Ok(())
     }
@@ -179,7 +120,8 @@ impl super::GitHubAdapter for &mut GitHub {
         I: IntoIterator<Item = S>,
     {
         if let Some(pr) = self.pull_requests.get_mut(&pr.number) {
-            pr.assignees.extend(assignees.into_iter().map(|s| s.into()));
+            pr._assignees
+                .extend(assignees.into_iter().map(|s| s.into()));
         }
         Ok(())
     }
@@ -197,7 +139,7 @@ impl super::GitHubAdapter for &mut GitHub {
             .get_mut(&pr.number)
             .ok_or_else(|| crate::error::Error::new("No such PR"))?;
 
-        pr.comments.push(PullRequestComment {
+        pr.comments.push(super::types::PullRequestComment {
             content: content.into(),
             id: format!("{}-{}", pr.number, pr.comments.len()),
             editable: true,
