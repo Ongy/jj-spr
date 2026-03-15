@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Update dependencies
 
+## [1.1] - 2026-03-15
+
+-  Update dependencies
+-  Use box drawing characters for overview comments
+-  Improve user feedback for ongoing operations and GitHub API errors
+-  Add best-effort detection for pure rebase operations and default commit message for those
+-  Allow re-ordering PRs during push
+-  Allow re-ordering revisions during fetch
+-  Add fix on push feature
+-  Improve push performance (by reducing roundtrips to GH)
+-  Add support for jj workspaces
+
 ## [1.0.1] - 2026-02-22
 
 - Remove test that pins the version
