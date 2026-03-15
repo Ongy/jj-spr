@@ -520,7 +520,7 @@ where
     }
 
     setup.set_message("Reading revisions");
-    let revisions = jj.read_revision_range(config, &revset)?;
+    let revisions = jj.read_revision_range(&revset)?;
 
     setup.set_message("Checking revisions for bad states");
     let blockers = jj.revset_to_change_ids(
@@ -1462,10 +1462,10 @@ pub mod tests {
             .expect("stacked shouldn't fail");
 
             let left_revision = jj
-                .read_revision(&testing::config::basic(), left_id)
+                .read_revision(left_id)
                 .expect("Couldn't read left revision");
             let right_revision = jj
-                .read_revision(&testing::config::basic(), right_id)
+                .read_revision(right_id)
                 .expect("Couldn't read right revision");
 
             assert_eq!(
@@ -1546,10 +1546,10 @@ pub mod tests {
             .expect("stacked shouldn't fail");
 
             let left_revision = jj
-                .read_revision(&testing::config::basic(), left_id.clone())
+                .read_revision(left_id.clone())
                 .expect("Couldn't read left revision");
             let right_revision = jj
-                .read_revision(&testing::config::basic(), right_id.clone())
+                .read_revision(right_id.clone())
                 .expect("Couldn't read right revision");
 
             assert_eq!(

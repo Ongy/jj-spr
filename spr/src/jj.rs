@@ -19,6 +19,10 @@ use crate::{
     message::{MessageSection, MessageSectionsMap, build_commit_message, parse_message},
 };
 use git2::Oid;
+use serde::Deserialize;
+
+//r#""{\"parents\": " ++ json(parents.map(|c| c.change_id())) ++ ", \"bookmarks\": " ++ json(bookmarks.map(|b| b.name())) ++ ", \"description\": " ++ json(description) ++ ", \"change_id\": " ++ json(change_id) ++ "}""#,
+static REVISION_TEMPLATE: &'static str = r#""{\"parents\": [" ++ parents.map(|c| json(c.change_id())).join(",") ++ "], \"bookmarks\": [" ++ bookmarks.map(|b| json(b.name())).join(",") ++ "], \"description\": " ++ json(description) ++ ", \"change_id\": " ++ json(change_id) ++ " }\n""#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeId {
@@ -36,7 +40,6 @@ impl<S: Into<String>> From<S> for ChangeId {
         ChangeId { id: id.into() }
     }
 }
-
 #[derive(Debug, Clone)]
 pub struct Revision {
     pub id: ChangeId,
@@ -45,6 +48,67 @@ pub struct Revision {
     pub title: String,
     pub message: MessageSectionsMap,
     pub bookmarks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawRevision {
+    change_id: String,
+    parents: Vec<String>,
+    bookmarks: Vec<String>,
+    description: String,
+}
+
+fn parse_pull_request_field(text: &str) -> Option<u64> {
+    if text.is_empty() {
+        return None;
+    }
+
+    let regex = lazy_regex::regex!(r#"^\s*#?\s*(\d+)\s*$"#);
+    let m = regex.captures(text);
+    if let Some(caps) = m {
+        return Some(caps.get(1).unwrap().as_str().parse().unwrap());
+    }
+
+    let regex = lazy_regex::regex!(
+        r#"^\s*https?://github.com/([\w\-\.]+)/([\w\-\.]+)/pull/(\d+)([/?#].*)?\s*$"#
+    );
+    let m = regex.captures(text);
+    if let Some(caps) = m {
+        return Some(caps.get(3).unwrap().as_str().parse().unwrap());
+    }
+
+    None
+}
+
+impl From<RawRevision> for Revision {
+    fn from(value: RawRevision) -> Self {
+        let message = parse_message(value.description.as_ref(), MessageSection::Title);
+        let pull_request_number = message
+            .get(&MessageSection::PullRequest)
+            .and_then(|url| parse_pull_request_field(url));
+        let title = String::from(
+            message
+                .get(&MessageSection::Title)
+                .map(|t| &t[..])
+                .unwrap_or(""),
+        );
+
+        Revision {
+            id: ChangeId {
+                id: value.change_id,
+            },
+            bookmarks: value.bookmarks,
+            parent_ids: value
+                .parents
+                .into_iter()
+                .map(|p| ChangeId { id: p })
+                .collect(),
+
+            pull_request_number,
+            title,
+            message,
+        }
+    }
 }
 
 impl AsRef<Revision> for Revision {
@@ -200,57 +264,6 @@ impl From<&git2::Commit<'_>> for RevSet {
 }
 
 impl Jujutsu {
-    pub fn read_revision(&self, config: &Config, id: ChangeId) -> Result<Revision> {
-        let output = self.run_ro_captured_with_args([
-            "log",
-            "--no-graph",
-            "-r",
-            RevSet::from(&id).unique().as_ref(),
-            "--template",
-            "parents.map(|c| c.change_id()).join( \",\") ++ \"\\n\" ++ bookmarks.map(|b| b.name()).join(\",\") ++ \"\\n\" ++ description",
-        ])?;
-
-        let mut parts = output.splitn(3, '\n');
-        let parents_str = parts.next().unwrap_or("");
-        let bookmarks_str = parts.next().unwrap_or("");
-        let description = parts.next().unwrap_or("");
-
-        let mut parent_ids = Vec::new();
-        for segment in parents_str.split(|c| c == ',') {
-            if !segment.is_empty() {
-                let parent_id = ChangeId::from(String::from(segment));
-                parent_ids.push(parent_id)
-            }
-        }
-
-        let mut bookmarks = Vec::new();
-        for segment in bookmarks_str.split(',') {
-            if !segment.is_empty() {
-                bookmarks.push(String::from(segment));
-            }
-        }
-
-        let message = parse_message(description, MessageSection::Title);
-        let pull_request_number = message
-            .get(&MessageSection::PullRequest)
-            .and_then(|url| config.parse_pull_request_field(url));
-        let title = String::from(
-            message
-                .get(&MessageSection::Title)
-                .map(|t| &t[..])
-                .unwrap_or(""),
-        );
-
-        Ok(Revision {
-            id,
-            parent_ids,
-            pull_request_number,
-            title,
-            message,
-            bookmarks,
-        })
-    }
-
     pub fn new<P>(path: P) -> Result<Self>
     where
         P: AsRef<std::path::Path>,
@@ -297,13 +310,39 @@ impl Jujutsu {
         self.prepare_commit(config, commit_oid)
     }
 
-    pub fn read_revision_range(&self, config: &Config, range: &RevSet) -> Result<Vec<Revision>> {
-        let revisions = self.revset_to_change_ids(range)?;
+    pub fn read_revision_range(&self, range: &RevSet) -> Result<Vec<Revision>> {
+        let output = self.run_ro_captured_with_args([
+            "log",
+            "--no-graph",
+            "--reversed",
+            "-r",
+            range.as_ref(),
+            "--template",
+            REVISION_TEMPLATE,
+        ])?;
 
-        revisions
+        let mut ret = Vec::new();
+        for line in output.lines() {
+            let raw: RawRevision = serde_json::from_str(line.trim())
+                .context(String::from("Decode revision in range"))?;
+            ret.push(Revision::from(raw))
+        }
+
+        Ok(ret)
+    }
+
+    pub fn read_revision(&self, id: ChangeId) -> Result<Revision> {
+        if let Some(r) = self
+            .read_revision_range(&RevSet::from(&id).unique())?
             .into_iter()
-            .map(|id| self.read_revision(config, id))
-            .collect()
+            .next()
+        {
+            Ok(r)
+        } else {
+            Err(crate::error::Error::new(format!(
+                "Could not find unique revision for {id:?}"
+            )))
+        }
     }
 
     pub fn update_revision_message(&mut self, rev: &Revision) -> Result<()> {
@@ -924,7 +963,6 @@ mod tests {
 
     #[test]
     fn test_revision_reading() {
-        let config = testing::config::basic();
         let (_temp_dr, jj, _) = testing::setup::repo_with_origin();
 
         // Create some commits
@@ -939,14 +977,14 @@ mod tests {
             &[commit2.as_str(), commit3.as_str()],
         );
 
-        let c1 = jj.read_revision(&config, ChangeId::from(commit2));
+        let c1 = jj.read_revision(ChangeId::from(commit2));
         assert!(c1.is_ok(), "Failed to read @ revision: {:?}", c1.err());
         assert!(
             c1.unwrap().parent_ids.len() == 1,
             "Got more than one parent of c1",
         );
 
-        let c2 = jj.read_revision(&config, ChangeId::from(commit4));
+        let c2 = jj.read_revision(ChangeId::from(commit4));
         assert!(c2.is_ok(), "Failed to read @ revision: {:?}", c2.err());
         assert!(
             c2.unwrap().parent_ids.len() == 2,

@@ -30,7 +30,7 @@ fn find_commit_for_pr(
 
     let id =
         jj.revset_to_change_id(&RevSet::description(format!("substring:\"{}\"", url)).unique())?;
-    jj.read_revision(config, id)
+    jj.read_revision(id)
 }
 
 fn do_adopt(
@@ -174,7 +174,7 @@ mod tests {
             .revset_to_change_id(&RevSet::current())
             .expect("Failed to resolve change of current");
         let rev = jj
-            .read_revision(&testing::config::basic(), change)
+            .read_revision(change)
             .expect("Failed to read revision after patch");
 
         let new_tree = jj

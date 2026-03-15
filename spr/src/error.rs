@@ -81,6 +81,14 @@ impl From<dialoguer::Error> for Error {
     }
 }
 
+impl From<serde_json::Error> for Error {
+    fn from(error: serde_json::Error) -> Self {
+        Self {
+            messages: vec![format!("{}", error)],
+        }
+    }
+}
+
 impl From<git2::Error> for Error {
     fn from(error: git2::Error) -> Self {
         Self {
