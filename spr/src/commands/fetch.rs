@@ -200,8 +200,7 @@ where
             RevSet::current()
         });
     let revisions = jj.read_revision_range(
-        config,
-        &&revset
+        &revset
             .ancestors()
             .without(&RevSet::immutable().or(&RevSet::description("exact:\"\""))),
     )?;
@@ -579,7 +578,7 @@ mod tests {
             .expect("Should be able to fetch");
 
             let revision = jj
-                .read_revision(&testing::config::basic(), child_change)
+                .read_revision(child_change)
                 .expect("Should be able to read revision");
             assert_eq!(
                 revision.parent_ids.as_slice(),
@@ -619,12 +618,12 @@ mod tests {
             .expect("Should be able to push for setup");
 
             let base_pr = jj
-                .read_revision(&testing::config::basic(), base_change.clone())
+                .read_revision(base_change.clone())
                 .expect("should be able to read base revision")
                 .pull_request_number
                 .expect("base change should have a PR");
             let child_pr = jj
-                .read_revision(&testing::config::basic(), child_change.clone())
+                .read_revision(child_change.clone())
                 .expect("should be able to read child revision")
                 .pull_request_number
                 .expect("child change should have a PR");
@@ -652,7 +651,7 @@ mod tests {
             .expect("Should be able to fetch");
 
             let revision = jj
-                .read_revision(&testing::config::basic(), child_change)
+                .read_revision(child_change)
                 .expect("Should be able to read revision");
             assert_eq!(
                 revision.parent_ids.as_slice(),

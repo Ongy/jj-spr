@@ -37,7 +37,6 @@ where
 
     // We are interested in all revisions that have PRs
     let revisions = jj.read_revision_range(
-        config,
         &revset
             .ancestors()
             .and(&RevSet::description("glob:\"*Pull Request:*\"").without(&RevSet::immutable())),
