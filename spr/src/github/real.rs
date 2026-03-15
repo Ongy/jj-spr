@@ -13,27 +13,6 @@ pub struct GitHub {
     crab: octocrab::Octocrab,
 }
 
-#[derive(Debug, Clone)]
-pub struct PullRequestComment {
-    content: String,
-    id: String,
-    editable: bool,
-}
-
-#[derive(Debug)]
-pub struct PullRequest {
-    base: String,
-    head: String,
-    number: u64,
-    node: String,
-    title: String,
-    body: String,
-    _reviewers: Vec<String>,
-    _assignees: Vec<String>,
-    comments: Vec<PullRequestComment>,
-    closed: bool,
-}
-
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "src/gql/schema.docs.graphql",
@@ -52,7 +31,7 @@ pub struct OldComments;
 )]
 pub struct ByHead;
 
-impl From<old_comments::OldCommentsRepositoryPullRequest> for PullRequest {
+impl From<old_comments::OldCommentsRepositoryPullRequest> for super::types::PullRequest {
     fn from(pr: old_comments::PR) -> Self {
         let assignees = pr
             .assignees
@@ -75,7 +54,7 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for PullRequest {
             .unwrap_or(Vec::new())
             .into_iter()
             .filter_map(|node| {
-                node.map(|comment| PullRequestComment {
+                node.map(|comment| super::types::PullRequestComment {
                     editable: comment.viewer_can_update,
                     content: comment.body,
                     id: comment.id,
@@ -98,7 +77,7 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for PullRequest {
     }
 }
 
-impl From<by_head::PR> for PullRequest {
+impl From<by_head::PR> for super::types::PullRequest {
     fn from(pr: by_head::PR) -> Self {
         unsafe {
             // These types are generated from the same fragment in graphql.
@@ -109,52 +88,6 @@ impl From<by_head::PR> for PullRequest {
     }
 }
 
-impl super::GithubPRComment for PullRequestComment {
-    fn editable(&self) -> bool {
-        self.editable
-    }
-
-    fn body(&self) -> &str {
-        self.content.as_ref()
-    }
-
-    fn id(&self) -> &str {
-        self.id.as_ref()
-    }
-}
-
-impl super::GHPullRequest for PullRequest {
-    type PRComment = PullRequestComment;
-
-    fn head_branch_name(&self) -> &str {
-        self.head.as_ref()
-    }
-
-    fn base_branch_name(&self) -> &str {
-        self.base.as_ref()
-    }
-
-    fn pr_number(&self) -> u64 {
-        self.number
-    }
-
-    fn body(&self) -> &str {
-        self.body.as_ref()
-    }
-
-    fn title(&self) -> &str {
-        self.title.as_ref()
-    }
-
-    fn closed(&self) -> bool {
-        self.closed
-    }
-
-    fn comments(&self) -> Vec<Self::PRComment> {
-        self.comments.clone()
-    }
-}
-
 impl GitHub {
     pub fn new(config: crate::config::Config, crab: octocrab::Octocrab) -> Self {
         Self { config, crab }
@@ -162,7 +95,7 @@ impl GitHub {
 }
 
 impl super::GitHubAdapter for &mut GitHub {
-    type PRAdapter = PullRequest;
+    type PRAdapter = super::types::PullRequest;
 
     async fn pull_request(&mut self, number: u64) -> crate::error::Result<Self::PRAdapter> {
         let variables = old_comments::Variables {
@@ -189,7 +122,7 @@ impl super::GitHubAdapter for &mut GitHub {
             .pull_request
             .ok_or_else(|| crate::error::Error::new("No PR in PR request"))?;
 
-        Ok(PullRequest::from(pr))
+        Ok(super::types::PullRequest::from(pr))
     }
 
     async fn pull_request_by_head<S>(&mut self, head: S) -> crate::error::Result<Self::PRAdapter>
@@ -228,7 +161,7 @@ impl super::GitHubAdapter for &mut GitHub {
         }
 
         if let Some(pr) = prs.into_iter().next() {
-            Ok(PullRequest::from(pr))
+            Ok(super::types::PullRequest::from(pr))
         } else {
             Err(crate::error::Error::new(format!(
                 "Couldn't find a PR for branch {}",
@@ -292,7 +225,7 @@ impl super::GitHubAdapter for &mut GitHub {
             .send()
             .await?;
 
-        Ok(PullRequest {
+        Ok(super::types::PullRequest {
             node: octo_pr
                 .node_id
                 .ok_or_else(|| crate::error::Error::new("No nodeID on new PR"))?,
