@@ -439,19 +439,16 @@ impl Jujutsu {
     ) -> Result<ChangeId> {
         let original_commit = RevSet::from(&self.git_repo.find_commit(original_commit_oid)?);
 
-        let parent_revset = parent_oids
-            .into_iter()
-            .try_fold(None as Option<RevSet>, |l, r| {
-                let r = RevSet::from(
-                    &self
-                        .git_repo
-                        .find_commit(r.clone())
-                        .context(format!("get commit for {r}"))?,
-                );
-                Ok(Some(if let Some(l) = l { l.or(&r) } else { r })) as crate::error::Result<_>
+        let parents: std::result::Result<Vec<RevSet>, _> = parent_oids
+            .iter()
+            .map(|r| {
+                self.git_repo
+                    .find_commit(r.clone())
+                    .context(format!("get commit for {r}"))
+                    .map(|c| RevSet::from(&c))
             })
-            .context(String::from("Build parents revset to derive onto"))?;
-        self.new_revision(parent_revset, Some(message), true)
+            .collect();
+        self.new_revision(parents?, Some(message), true)
             .context(String::from("Create new for derived commit"))?;
 
         let change = self
@@ -749,16 +746,19 @@ impl Jujutsu {
         self.run_captured_with_args(["git", "fetch"]).map(|_| {})
     }
 
-    pub fn new_revision<M: AsRef<str>>(
+    pub fn new_revision<M: AsRef<str>, I>(
         &mut self,
-        parents: Option<RevSet>,
+        parents: I,
         message: Option<M>,
         no_edit: bool,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        I: IntoIterator<Item = RevSet>,
+    {
+        let parents: Vec<_> = parents.into_iter().collect();
         let mut args = vec!["new"];
-        if let Some(ref r) = parents {
-            args.push(r.as_ref());
-        }
+        args.extend(parents.iter().map(|r| r.as_ref()));
+
         if let Some(ref m) = message {
             args.extend(["-m", m.as_ref()]);
         }
