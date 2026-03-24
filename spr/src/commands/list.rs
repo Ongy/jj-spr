@@ -33,7 +33,7 @@ where
         )
         .await?;
 
-    let mut template = String::new();
+    let mut template = String::from("\"\"");
     for (rev, pr) in std::iter::zip(revisions, pull_requests).into_iter() {
         let pr = match pr {
             Some(pr) => pr,
@@ -50,17 +50,10 @@ where
             }
         }
 
-        if template == "" {
-            template = format!(
-                "if(stringify(change_id) == \"{}\", \"{}\")",
-                rev.id, message,
-            )
-        } else {
-            template = format!(
-                "if(stringify(change_id) == \"{}\", \"{}\", {template})",
-                rev.id, message,
-            )
-        }
+        template = format!(
+            "if(stringify(change_id) == \"{}\", \"{}\", {template})",
+            rev.id, message,
+        )
     }
 
     Command::new("jj")
