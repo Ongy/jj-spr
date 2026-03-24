@@ -16,6 +16,8 @@ pub trait GHPullRequest {
     fn title(&self) -> &str;
     fn closed(&self) -> bool;
     fn comments(&self) -> Vec<Self::PRComment>;
+
+    fn reviewers(&self) -> &Vec<String>;
 }
 
 pub trait GitHubAdapter {

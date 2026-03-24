@@ -13,7 +13,7 @@ pub struct PullRequest {
     pub node: String,
     pub title: String,
     pub body: String,
-    pub _reviewers: Vec<String>,
+    pub reviewers: Vec<String>,
     pub _assignees: Vec<String>,
     pub comments: Vec<PullRequestComment>,
     pub closed: bool,
@@ -62,5 +62,9 @@ impl super::GHPullRequest for PullRequest {
 
     fn comments(&self) -> Vec<Self::PRComment> {
         self.comments.clone()
+    }
+
+    fn reviewers(&self) -> &Vec<String> {
+        &self.reviewers
     }
 }

@@ -1,0 +1,79 @@
+use std::process::Command;
+
+#[derive(Debug, clap::Parser, Default)]
+pub struct ListOptions {}
+
+pub async fn list<GH, PR>(
+    jj: &mut crate::jj::Jujutsu,
+    mut gh: GH,
+    config: &crate::config::Config,
+    _: ListOptions,
+) -> crate::error::Result<()>
+where
+    PR: crate::github::GHPullRequest,
+    GH: crate::github::GitHubAdapter<PRAdapter = PR>,
+{
+    let revset = crate::jj::RevSet::mutable();
+    let revisions = jj.read_revision_range(
+        &crate::jj::RevSet::mutable()
+            .and(&crate::jj::RevSet::description("glob:\"*Pull Request:*\"")),
+    )?;
+
+    if revisions.is_empty() {
+        crate::output::output(
+            &config.icons.wave,
+            "No commits found - nothing to do. Good bye!",
+        )?;
+        return Ok(());
+    }
+    let pull_requests = gh
+        .pull_requests(
+            revisions
+                .iter()
+                .map(|revision| revision.pull_request_number),
+        )
+        .await?;
+    let mut template = String::new();
+    for (rev, pr) in std::iter::zip(revisions, pull_requests).into_iter() {
+        let pr = match pr {
+            Some(pr) => pr,
+            None => continue,
+        };
+
+        let reviewers = if !pr.reviewers().is_empty() {
+            config.icons.eyes.as_ref()
+        } else {
+            ""
+        };
+        let message = format!("{} {}", config.pull_request_url(pr.pr_number()), reviewers);
+
+        if template == "" {
+            template = format!(
+                "if(stringify(change_id) == \"{}\", \"{}\")",
+                rev.id, message,
+            )
+        } else {
+            template = format!(
+                "if(stringify(change_id) == \"{}\", \"{}\", {template})",
+                rev.id, message,
+            )
+        }
+    }
+
+    Command::new("jj")
+        .current_dir(
+            jj.git_repo
+                .workdir()
+                .ok_or_else(|| crate::error::Error::new("No workdir on git repo?"))?,
+        )
+        .args([
+            "log",
+            "-r",
+            revset.or(&revset.ancestors_limited(2)).as_ref(),
+            "-T",
+            format!("builtin_log_compact ++ {template}",).as_ref(),
+        ])
+        .status()?;
+
+    Ok(())
+}

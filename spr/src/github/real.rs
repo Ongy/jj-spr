@@ -70,7 +70,7 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for super::types::Pull
             body: pr.body,
             title: pr.title,
             closed: pr.closed,
-            _reviewers: reviewers,
+            reviewers,
             _assignees: assignees,
             comments,
         }
@@ -234,7 +234,7 @@ impl super::GitHubAdapter for &mut GitHub {
             number: octo_pr.number,
             title: octo_pr.title.unwrap_or(String::new()),
             body: octo_pr.body.unwrap_or(String::new()),
-            _reviewers: Vec::new(),
+            reviewers: Vec::new(),
             _assignees: Vec::new(),
             comments: Vec::new(),
             closed: false,

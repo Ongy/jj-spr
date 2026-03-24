@@ -61,6 +61,9 @@ enum Commands {
 
     /// Create a new branch with the contents of an existing Pull Request
     Adopt(commands::adopt::AdoptOptions),
+
+    /// List information about currently open PRs tracked by this repository
+    List(commands::list::ListOptions),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -129,6 +132,7 @@ pub async fn spr() -> Result<()> {
         Commands::Adopt(opts) => commands::adopt::adopt(opts, &mut jj, &mut gh, &config).await?,
         Commands::Push(opts) => commands::push::push(&mut jj, &mut gh, &config, opts).await?,
         Commands::Sync(opts) => commands::sync::sync(&mut jj, &mut gh, &config, opts).await?,
+        Commands::List(opts) => commands::list::list(&mut jj, &mut gh, &config, opts).await?,
         // The following commands are executed above and return from this
         // function before it reaches this match.
         Commands::Init => (),

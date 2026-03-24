@@ -15,7 +15,7 @@ impl super::types::PullRequest {
             number,
             title: title.into(),
             body: body.into(),
-            _reviewers: Vec::new(),
+            reviewers: Vec::new(),
             _assignees: Vec::new(),
             comments: Vec::new(),
             node: String::new(),
@@ -104,7 +104,7 @@ impl super::GitHubAdapter for &mut GitHub {
         I: IntoIterator<Item = S>,
     {
         if let Some(pr) = self.pull_requests.get_mut(&pr.number) {
-            pr._reviewers
+            pr.reviewers
                 .extend(reviewers.into_iter().map(|s| s.into()));
         }
         Ok(())
