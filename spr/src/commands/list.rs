@@ -15,8 +15,7 @@ where
 {
     let revset = crate::jj::RevSet::mutable();
     let revisions = jj.read_revision_range(
-        &revset
-            .and(&crate::jj::RevSet::description("glob:\"*Pull Request:*\"")),
+        &revset.and(&crate::jj::RevSet::description("glob:\"*Pull Request:*\"")),
     )?;
     if revisions.is_empty() {
         crate::output::output(
@@ -41,12 +40,15 @@ where
             None => continue,
         };
 
-        let reviewers = if !pr.reviewers().is_empty() {
-            config.icons.eyes.as_ref()
+        let mut message = config.pull_request_url(pr.pr_number()) + " ";
+        if pr.closed() {
+            message += config.icons.land.as_ref();
         } else {
-            ""
-        };
-        let message = format!("{} {}", config.pull_request_url(pr.pr_number()), reviewers);
+            // If it's already landed, all other info we might have is useless.
+            if !pr.reviewers().is_empty() {
+                message += config.icons.eyes.as_ref();
+            }
+        }
 
         if template == "" {
             template = format!(
