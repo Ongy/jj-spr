@@ -58,7 +58,7 @@ query ByHead(
   $head: String!
 ) {
   repository(owner: $owner, name: $name) {
-    pullRequests(headRefName: $head, first: 1000) {
+    pullRequests(headRefName: $head, first: 10) {
       nodes {
         ...PR
       }
