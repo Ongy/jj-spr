@@ -10,5 +10,6 @@ pub mod fetch;
 pub mod init;
 pub mod push;
 pub mod sync;
+pub mod detach;
 #[cfg(test)]
 pub mod tests;
