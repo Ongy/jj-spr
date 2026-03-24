@@ -15,10 +15,9 @@ where
 {
     let revset = crate::jj::RevSet::mutable();
     let revisions = jj.read_revision_range(
-        &crate::jj::RevSet::mutable()
+        &revset
             .and(&crate::jj::RevSet::description("glob:\"*Pull Request:*\"")),
     )?;
-
     if revisions.is_empty() {
         crate::output::output(
             &config.icons.wave,
@@ -26,6 +25,7 @@ where
         )?;
         return Ok(());
     }
+
     let pull_requests = gh
         .pull_requests(
             revisions
@@ -33,6 +33,7 @@ where
                 .map(|revision| revision.pull_request_number),
         )
         .await?;
+
     let mut template = String::new();
     for (rev, pr) in std::iter::zip(revisions, pull_requests).into_iter() {
         let pr = match pr {
