@@ -56,6 +56,8 @@ where
         )
     }
 
+    // The crate::jj lib is intended for scripting against jj.
+    // Here jj is used to generate the user facing output.
     Command::new("jj")
         .current_dir(
             jj.git_repo
