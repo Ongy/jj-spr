@@ -63,16 +63,13 @@ impl FetchOptions {
     }
 }
 
-async fn do_fetch<
-    I: IntoIterator<
-        Item = (
-            crate::jj::Revision,
-            Option<impl crate::github::GHPullRequest>,
-        ),
-    >,
-    GH,
-    PR,
->(
+struct WorkItem<PR> {
+    revision: crate::jj::Revision,
+    pull_request: PR,
+    progress: indicatif::ProgressBar,
+}
+
+async fn do_fetch<I: IntoIterator<Item = WorkItem<PR>>, GH, PR>(
     opts: FetchOptions,
     jj: &mut crate::jj::Jujutsu,
     mut gh: GH,
@@ -86,19 +83,14 @@ where
     let mut failure = false;
     let mut items: Vec<_> = commits.into_iter().collect();
 
-    for (revision, pull_request) in items.iter_mut() {
-        let pull_request = if let Some(pull_request) = pull_request {
-            pull_request
-        } else {
-            continue;
-        };
-
+    for work in items.iter_mut() {
         // Ok, we want to update our local change with any code changes that were done upstream
         if opts.pull_code_changes
-            && let Some(old_rev) = revision.message.get(&MessageSection::LastCommit)
+            && let Some(old_rev) = work.revision.message.get(&MessageSection::LastCommit)
         {
             if opts.rebase {
-                if pull_request.base_branch_name() == config.master_ref {
+                work.progress.set_message("Rebasing");
+                if work.pull_request.base_branch_name() == config.master_ref {
                     // Ok, we want to rebase onto main...
                     // But we don't intend to be based on HEAD but the forkpoint
                     // This avoids unnecessary potential for conflict
@@ -110,37 +102,43 @@ where
                         crate::jj::RevSet::from_remote_branch(&branch, &config.remote_name)?
                     };
                     jj.rebase(
-                        &crate::jj::RevSet::from(&revision.id),
-                        &crate::jj::RevSet::from(&revision.id).fork_point(&base_head),
+                        &crate::jj::RevSet::from(&work.revision.id),
+                        &crate::jj::RevSet::from(&work.revision.id).fork_point(&base_head),
                     )?;
                 } else {
                     let base_pr = gh
-                        .pull_request_by_head(pull_request.base_branch_name())
+                        .pull_request_by_head(work.pull_request.base_branch_name())
                         .await?;
 
                     let url = config.pull_request_url(base_pr.pr_number());
 
                     jj.rebase(
-                        &crate::jj::RevSet::from(&revision.id),
+                        &crate::jj::RevSet::from(&work.revision.id),
                         &RevSet::description(format!("substring:\"{}\"", url)).unique(),
                     )?;
                 }
             }
 
+            work.progress.set_message("Merging code changes");
             let base_revset = {
                 let base_commit = jj.git_repo.find_commit(git2::Oid::from_str(old_rev)?)?;
                 RevSet::from(&base_commit)
             };
             let head_revset = {
                 let head_branch = jj.git_repo.find_branch(
-                    format!("{}/{}", config.remote_name, pull_request.head_branch_name()).as_str(),
+                    format!(
+                        "{}/{}",
+                        config.remote_name,
+                        work.pull_request.head_branch_name()
+                    )
+                    .as_str(),
                     git2::BranchType::Remote,
                 )?;
                 RevSet::from_remote_branch(&head_branch, &config.remote_name)?
             };
             // When we are based on the main branch, we'll potentially rebase.
             // This only makes sense for changes on main.
-            if pull_request.base_branch_name() == config.master_ref {
+            if work.pull_request.base_branch_name() == config.master_ref {
                 let main_revset = {
                     let main_branch = jj.git_repo.find_branch(
                         format!("{}/{}", config.remote_name, config.master_ref).as_str(),
@@ -151,8 +149,9 @@ where
 
                 let main_head_fork =
                     jj.revset_to_change_id(&head_revset.fork_point(&main_revset))?;
-                let main_change_fork =
-                    jj.revset_to_change_id(&RevSet::from(&revision.id).fork_point(&main_revset))?;
+                let main_change_fork = jj.revset_to_change_id(
+                    &RevSet::from(&work.revision.id).fork_point(&main_revset),
+                )?;
 
                 let forks_fork = jj.revset_to_change_id(
                     &RevSet::from(&main_head_fork).fork_point(&RevSet::from(&main_change_fork)),
@@ -162,28 +161,31 @@ where
                 // I.e. a user pressed the "merge base into PR" button
                 // So we should update to also be based on that.
                 if forks_fork == main_change_fork && main_change_fork != main_head_fork {
-                    jj.rebase_branch(&RevSet::from(&revision.id), main_head_fork)?;
+                    jj.rebase_branch(&RevSet::from(&work.revision.id), main_head_fork)?;
                 }
             }
 
-            jj.squash_copy(&base_revset.to(&head_revset), revision.id.clone())?;
+            jj.squash_copy(&base_revset.to(&head_revset), work.revision.id.clone())?;
             let new_latest_commit = jj.resolve_revision_to_commit_id(head_revset.as_ref())?;
-            revision
+            work.revision
                 .message
                 .insert(MessageSection::LastCommit, new_latest_commit.to_string());
         }
 
-        revision
+        work.progress.set_message("Updating metadata");
+        work.revision
             .message
-            .insert(MessageSection::Title, pull_request.title().into());
-        revision
+            .insert(MessageSection::Title, work.pull_request.title().into());
+        work.revision
             .message
-            .insert(MessageSection::Summary, pull_request.body().into());
+            .insert(MessageSection::Summary, work.pull_request.body().into());
 
-        failure = validate_commit_message(config, &revision.message).is_err() || failure;
+        failure = validate_commit_message(config, &work.revision.message).is_err() || failure;
+        work.progress.finish_with_message("Done");
     }
-    for (rev, _) in items.into_iter() {
-        jj.update_revision_message(&rev)?;
+
+    for work in items.into_iter() {
+        jj.update_revision_message(&work.revision)?;
     }
 
     if failure { Err(Error::empty()) } else { Ok(()) }
@@ -236,14 +238,26 @@ where
         .await?;
 
     setup.set_message("Updating local revisions");
-    do_fetch(
-        opts,
-        jj,
-        gh,
-        config,
-        std::iter::zip(revisions, pull_requests.into_iter()),
-    )
-    .await?;
+    let work = std::iter::zip(revisions, pull_requests.into_iter()).filter_map(|(revision, pr)| {
+        pr.map(|pull_request| {
+            let progress = multi.add(
+                indicatif::ProgressBar::new(100).with_style(
+                    indicatif::ProgressStyle::default_bar()
+                        .template("{prefix}: {msg}")
+                        .expect("Indicatif template shouldn't fail"),
+                ),
+            );
+            progress.set_prefix(format!("{}", revision.title));
+            progress.set_message("Fetching");
+            WorkItem {
+                pull_request,
+                revision,
+                progress,
+            }
+        })
+    });
+
+    do_fetch(opts, jj, gh, config, work).await?;
     setup.finish_and_clear();
     Ok(())
 }
