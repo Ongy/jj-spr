@@ -94,16 +94,33 @@ where
                     // Ok, we want to rebase onto main...
                     // But we don't intend to be based on HEAD but the forkpoint
                     // This avoids unnecessary potential for conflict
-                    let base_head = {
+                    let base_revset = {
                         let branch = jj.git_repo.find_branch(
-                            format!("{}/{}", config.remote_name, config.master_ref).as_ref(),
+                            format!(
+                                "{}/{}",
+                                config.remote_name,
+                                work.pull_request.base_branch_name()
+                            )
+                            .as_ref(),
+                            git2::BranchType::Remote,
+                        )?;
+                        crate::jj::RevSet::from_remote_branch(&branch, &config.remote_name)?
+                    };
+                    let head_revset = {
+                        let branch = jj.git_repo.find_branch(
+                            format!(
+                                "{}/{}",
+                                config.remote_name,
+                                work.pull_request.head_branch_name()
+                            )
+                            .as_ref(),
                             git2::BranchType::Remote,
                         )?;
                         crate::jj::RevSet::from_remote_branch(&branch, &config.remote_name)?
                     };
                     jj.rebase(
                         &crate::jj::RevSet::from(&work.revision.id),
-                        &crate::jj::RevSet::from(&work.revision.id).fork_point(&base_head),
+                        &head_revset.fork_point(&base_revset),
                     )?;
                 } else {
                     let base_pr = gh
@@ -136,34 +153,6 @@ where
                 )?;
                 RevSet::from_remote_branch(&head_branch, &config.remote_name)?
             };
-            // When we are based on the main branch, we'll potentially rebase.
-            // This only makes sense for changes on main.
-            if work.pull_request.base_branch_name() == config.master_ref {
-                let main_revset = {
-                    let main_branch = jj.git_repo.find_branch(
-                        format!("{}/{}", config.remote_name, config.master_ref).as_str(),
-                        git2::BranchType::Remote,
-                    )?;
-                    RevSet::from_remote_branch(&main_branch, &config.remote_name)?
-                };
-
-                let main_head_fork =
-                    jj.revset_to_change_id(&head_revset.fork_point(&main_revset))?;
-                let main_change_fork = jj.revset_to_change_id(
-                    &RevSet::from(&work.revision.id).fork_point(&main_revset),
-                )?;
-
-                let forks_fork = jj.revset_to_change_id(
-                    &RevSet::from(&main_head_fork).fork_point(&RevSet::from(&main_change_fork)),
-                )?;
-
-                // I.e. HEAD's base is *ahead* of our base.
-                // I.e. a user pressed the "merge base into PR" button
-                // So we should update to also be based on that.
-                if forks_fork == main_change_fork && main_change_fork != main_head_fork {
-                    jj.rebase_branch(&RevSet::from(&work.revision.id), main_head_fork)?;
-                }
-            }
 
             jj.squash_copy(&base_revset.to(&head_revset), work.revision.id.clone())?;
             let new_latest_commit = jj.resolve_revision_to_commit_id(head_revset.as_ref())?;
@@ -476,7 +465,8 @@ mod tests {
         super::fetch(
             FetchOptions::default()
                 .with_revset(Some(rev.as_ref()))
-                .with_pull_code(),
+                .with_pull_code()
+                .with_rebase(),
             &mut jj,
             &mut crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(
