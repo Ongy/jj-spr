@@ -21,9 +21,18 @@ pub struct FetchOptions {
     #[clap(long, short = 'a', group = "revs")]
     all: bool,
 
-    /// Whether to also merge in any code changes
-    #[clap(long, required_if_eq("rebase", "true"))]
+    /// Whether to also merge in any code changes (default)
+    #[clap(
+        long,
+        required_if_eq("rebase", "true"),
+        default_value = "true",
+        overrides_with = "_no_pull_code_changes"
+    )]
     pull_code_changes: bool,
+
+    /// Don't pull any code changes
+    #[clap(long = "no-pull-code-changes")]
+    _no_pull_code_changes: bool,
 
     /// Whether to update the revision order.
     /// I.e. if the PR was rebased on github, revisions will be rebased locally.
