@@ -17,6 +17,7 @@ pub struct PullRequest {
     pub _assignees: Vec<String>,
     pub comments: Vec<PullRequestComment>,
     pub closed: bool,
+    pub review_decision: Option<super::traits::ReviewDecision>,
 }
 
 impl super::GithubPRComment for PullRequestComment {
@@ -66,5 +67,9 @@ impl super::GHPullRequest for PullRequest {
 
     fn reviewers(&self) -> &Vec<String> {
         &self.reviewers
+    }
+
+    fn review_decision(&self) -> Option<super::traits::ReviewDecision> {
+        self.review_decision.clone()
     }
 }

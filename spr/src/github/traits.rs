@@ -1,5 +1,13 @@
 static COMMENT_MARKER: &str = "\n<!--creatd by jj-spr-->";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewDecision {
+    Approved,
+    ChangesRequested,
+    ReviewRequired,
+    Other(String),
+}
+
 pub trait GithubPRComment {
     fn editable(&self) -> bool;
     fn body(&self) -> &str;
@@ -16,8 +24,9 @@ pub trait GHPullRequest {
     fn title(&self) -> &str;
     fn closed(&self) -> bool;
     fn comments(&self) -> Vec<Self::PRComment>;
-
     fn reviewers(&self) -> &Vec<String>;
+
+    fn review_decision(&self) -> Option<ReviewDecision>;
 }
 
 pub trait GitHubAdapter {

@@ -62,6 +62,21 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for super::types::Pull
             })
             .collect();
 
+        let review_decision = pr.review_decision.map(|rd| match rd {
+            old_comments::PullRequestReviewDecision::APPROVED => {
+                super::traits::ReviewDecision::Approved
+            }
+            old_comments::PullRequestReviewDecision::CHANGES_REQUESTED => {
+                super::traits::ReviewDecision::ChangesRequested
+            }
+            old_comments::PullRequestReviewDecision::REVIEW_REQUIRED => {
+                super::traits::ReviewDecision::ReviewRequired
+            }
+            old_comments::PullRequestReviewDecision::Other(o) => {
+                super::traits::ReviewDecision::Other(o)
+            }
+        });
+
         Self {
             base: pr.base_ref_name,
             head: pr.head_ref_name,
@@ -73,6 +88,7 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for super::types::Pull
             reviewers,
             _assignees: assignees,
             comments,
+            review_decision,
         }
     }
 }
@@ -238,6 +254,7 @@ impl super::GitHubAdapter for &mut GitHub {
             _assignees: Vec::new(),
             comments: Vec::new(),
             closed: false,
+            review_decision: None,
         })
     }
 

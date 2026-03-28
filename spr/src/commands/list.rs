@@ -49,6 +49,13 @@ where
                 message += config.icons.eyes.as_ref();
             }
         }
+        match pr.review_decision() {
+            Some(crate::github::ReviewDecision::ChangesRequested)
+            | Some(crate::github::ReviewDecision::ReviewRequired) => {
+                message += config.icons.sparkle.as_ref();
+            }
+            _ => {}
+        }
 
         template = format!(
             "if(stringify(change_id) == \"{}\", \"{}\", {template})",
@@ -66,6 +73,7 @@ where
         )
         .args([
             "log",
+            "--no-pager",
             "-r",
             revset.or(&revset.ancestors_limited(2)).as_ref(),
             "-T",

@@ -19,6 +19,7 @@ fragment PR on PullRequest {
   headRefName
   closed
   merged
+  reviewDecision
   comments(first: 100) {
     nodes {
       body

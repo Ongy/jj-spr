@@ -21,9 +21,18 @@ pub struct FetchOptions {
     #[clap(long, short = 'a', group = "revs")]
     all: bool,
 
-    /// Whether to also merge in any code changes
-    #[clap(long, required_if_eq("rebase", "true"))]
+    /// Whether to also merge in any code changes (default)
+    #[clap(
+        long,
+        required_if_eq("rebase", "true"),
+        default_value = "true",
+        overrides_with = "_no_pull_code_changes"
+    )]
     pull_code_changes: bool,
+
+    /// Don't pull any code changes
+    #[clap(long = "no-pull-code-changes")]
+    _no_pull_code_changes: bool,
 
     /// Whether to update the revision order.
     /// I.e. if the PR was rebased on github, revisions will be rebased locally.
@@ -54,16 +63,44 @@ impl FetchOptions {
     }
 }
 
-async fn do_fetch<
-    I: IntoIterator<
-        Item = (
-            crate::jj::Revision,
-            Option<impl crate::github::GHPullRequest>,
-        ),
-    >,
-    GH,
-    PR,
->(
+enum WorkEvent<'a> {
+    Rebased(&'a crate::config::Config),
+    Code(&'a crate::config::Config),
+    Title(&'a crate::config::Config),
+    Summary(&'a crate::config::Config),
+}
+
+type WorkLog<'a> = Vec<WorkEvent<'a>>;
+impl<'a> std::fmt::Display for WorkEvent<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (name, icon) = match self {
+            WorkEvent::Rebased(c) => ("Rebased", c.icons.refresh.as_ref()),
+            WorkEvent::Code(c) => ("Updated Code", c.icons.working.as_ref()),
+            WorkEvent::Title(c) => ("Updated Title", c.icons.info.as_ref()),
+            WorkEvent::Summary(c) => ("Updated Summary", c.icons.info.as_ref()),
+        };
+
+        f.write_str(name)?;
+        f.write_str(icon)?;
+        Ok(())
+    }
+}
+
+fn format_worklog(log: &WorkLog, config: &crate::config::Config) -> String {
+    if log.is_empty() {
+        return format!("Nothing to be done {}.", config.icons.sleeping.as_ref());
+    }
+
+    let stringified: Vec<_> = log.iter().map(|e| format!("{}", e)).collect();
+    stringified.join("&")
+}
+struct WorkItem<PR> {
+    revision: crate::jj::Revision,
+    pull_request: PR,
+    progress: indicatif::ProgressBar,
+}
+
+async fn do_fetch<I: IntoIterator<Item = WorkItem<PR>>, GH, PR>(
     opts: FetchOptions,
     jj: &mut crate::jj::Jujutsu,
     mut gh: GH,
@@ -77,104 +114,114 @@ where
     let mut failure = false;
     let mut items: Vec<_> = commits.into_iter().collect();
 
-    for (revision, pull_request) in items.iter_mut() {
-        let pull_request = if let Some(pull_request) = pull_request {
-            pull_request
-        } else {
-            continue;
-        };
+    for work in items.iter_mut() {
+        let mut log = WorkLog::default();
 
         // Ok, we want to update our local change with any code changes that were done upstream
         if opts.pull_code_changes
-            && let Some(old_rev) = revision.message.get(&MessageSection::LastCommit)
+            && let Some(old_rev) = work.revision.message.get(&MessageSection::LastCommit)
         {
+            let head_revset = {
+                let head_branch = jj.git_repo.find_branch(
+                    format!(
+                        "{}/{}",
+                        config.remote_name,
+                        work.pull_request.head_branch_name()
+                    )
+                    .as_str(),
+                    git2::BranchType::Remote,
+                )?;
+                RevSet::from_remote_branch(&head_branch, &config.remote_name)?
+            };
+
             if opts.rebase {
-                if pull_request.base_branch_name() == config.master_ref {
+                work.progress.set_message("Rebasing");
+                let revset = crate::jj::RevSet::from(&work.revision.id);
+                let pre_parent = jj.revset_to_change_id(&revset.parent())?;
+                if work.pull_request.base_branch_name() == config.master_ref {
                     // Ok, we want to rebase onto main...
                     // But we don't intend to be based on HEAD but the forkpoint
                     // This avoids unnecessary potential for conflict
-                    let base_head = {
+                    let base_revset = {
                         let branch = jj.git_repo.find_branch(
-                            format!("{}/{}", config.remote_name, config.master_ref).as_ref(),
+                            format!(
+                                "{}/{}",
+                                config.remote_name,
+                                work.pull_request.base_branch_name()
+                            )
+                            .as_ref(),
                             git2::BranchType::Remote,
                         )?;
                         crate::jj::RevSet::from_remote_branch(&branch, &config.remote_name)?
                     };
-                    jj.rebase(
-                        &crate::jj::RevSet::from(&revision.id),
-                        &crate::jj::RevSet::from(&revision.id).fork_point(&base_head),
-                    )?;
+                    jj.rebase(&revset, &head_revset.fork_point(&base_revset))?;
                 } else {
                     let base_pr = gh
-                        .pull_request_by_head(pull_request.base_branch_name())
+                        .pull_request_by_head(work.pull_request.base_branch_name())
                         .await?;
 
                     let url = config.pull_request_url(base_pr.pr_number());
 
                     jj.rebase(
-                        &crate::jj::RevSet::from(&revision.id),
+                        &revset,
                         &RevSet::description(format!("substring:\"{}\"", url)).unique(),
                     )?;
                 }
+                let post_parent = jj.revset_to_change_id(&revset.parent())?;
+
+                if post_parent != pre_parent {
+                    log.push(WorkEvent::Rebased(config));
+                }
             }
 
+            work.progress.set_message("Merging code changes");
             let base_revset = {
                 let base_commit = jj.git_repo.find_commit(git2::Oid::from_str(old_rev)?)?;
                 RevSet::from(&base_commit)
             };
-            let head_revset = {
-                let head_branch = jj.git_repo.find_branch(
-                    format!("{}/{}", config.remote_name, pull_request.head_branch_name()).as_str(),
-                    git2::BranchType::Remote,
-                )?;
-                RevSet::from_remote_branch(&head_branch, &config.remote_name)?
-            };
-            // When we are based on the main branch, we'll potentially rebase.
-            // This only makes sense for changes on main.
-            if pull_request.base_branch_name() == config.master_ref {
-                let main_revset = {
-                    let main_branch = jj.git_repo.find_branch(
-                        format!("{}/{}", config.remote_name, config.master_ref).as_str(),
-                        git2::BranchType::Remote,
-                    )?;
-                    RevSet::from_remote_branch(&main_branch, &config.remote_name)?
-                };
-
-                let main_head_fork =
-                    jj.revset_to_change_id(&head_revset.fork_point(&main_revset))?;
-                let main_change_fork =
-                    jj.revset_to_change_id(&RevSet::from(&revision.id).fork_point(&main_revset))?;
-
-                let forks_fork = jj.revset_to_change_id(
-                    &RevSet::from(&main_head_fork).fork_point(&RevSet::from(&main_change_fork)),
-                )?;
-
-                // I.e. HEAD's base is *ahead* of our base.
-                // I.e. a user pressed the "merge base into PR" button
-                // So we should update to also be based on that.
-                if forks_fork == main_change_fork && main_change_fork != main_head_fork {
-                    jj.rebase_branch(&RevSet::from(&revision.id), main_head_fork)?;
-                }
-            }
-
-            jj.squash_copy(&base_revset.to(&head_revset), revision.id.clone())?;
             let new_latest_commit = jj.resolve_revision_to_commit_id(head_revset.as_ref())?;
-            revision
-                .message
-                .insert(MessageSection::LastCommit, new_latest_commit.to_string());
+            if new_latest_commit.to_string() != *old_rev {
+                jj.squash_copy(&base_revset.to(&head_revset), work.revision.id.clone())?;
+                log.push(WorkEvent::Code(config));
+                work.revision
+                    .message
+                    .insert(MessageSection::LastCommit, new_latest_commit.to_string());
+            }
         }
 
-        revision
+        work.progress.set_message("Updating metadata");
+        if work
+            .revision
             .message
-            .insert(MessageSection::Title, pull_request.title().into());
-        revision
+            .get(&MessageSection::Title)
+            .map(|t| t != work.pull_request.title())
+            .unwrap_or(true)
+        {
+            work.revision
+                .message
+                .insert(MessageSection::Title, work.pull_request.title().into());
+            log.push(WorkEvent::Title(config));
+        }
+        if work
+            .revision
             .message
-            .insert(MessageSection::Summary, pull_request.body().into());
+            .get(&MessageSection::Summary)
+            .map(|t| t != work.pull_request.body())
+            .unwrap_or(true)
+        {
+            work.revision
+                .message
+                .insert(MessageSection::Summary, work.pull_request.body().into());
+            log.push(WorkEvent::Summary(config));
+        }
 
-        failure = validate_commit_message(config, &revision.message).is_err() || failure;
+        failure = validate_commit_message(config, &work.revision.message).is_err() || failure;
+        work.progress
+            .finish_with_message(format_worklog(&log, config));
     }
-    for (rev, _) in items.into_iter() {
-        jj.update_revision_message(&rev)?;
+
+    for work in items.into_iter() {
+        jj.update_revision_message(&work.revision)?;
     }
 
     if failure { Err(Error::empty()) } else { Ok(()) }
@@ -190,6 +237,16 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
+    let multi = indicatif::MultiProgress::new();
+    let setup = multi.add(
+        indicatif::ProgressBar::new(100).with_style(
+            indicatif::ProgressStyle::default_bar()
+                .template("{msg}")
+                .expect("Indicatif template shouldn't fail"),
+        ),
+    );
+
+    setup.set_message("Figuring out what to do");
     let revset = opts
         .revset
         .as_ref()
@@ -206,25 +263,43 @@ where
     )?;
 
     if revisions.is_empty() {
-        crate::output::output(
-            &config.icons.wave,
-            "No commits found - nothing to do. Good bye!",
-        )?;
+        setup.finish_with_message("No commits found - nothing to do. Good bye!");
         return Ok(());
     }
 
+    setup.set_message("Fetching current state from github");
+    jj.run_git_fetch()?;
     let pull_requests = gh
         .pull_requests(revisions.iter().map(|r| r.pull_request_number))
         .await?;
 
-    do_fetch(
-        opts,
-        jj,
-        gh,
-        config,
-        std::iter::zip(revisions, pull_requests.into_iter()),
-    )
-    .await
+    setup.set_message("Updating local revisions");
+    let work = std::iter::zip(revisions, pull_requests.into_iter()).filter_map(|(revision, pr)| {
+        pr.map(|pull_request| {
+            let progress = multi.add(
+                indicatif::ProgressBar::new(100).with_style(
+                    indicatif::ProgressStyle::default_bar()
+                        .template("{prefix}: {msg}")
+                        .expect("Indicatif template shouldn't fail"),
+                ),
+            );
+            progress.set_prefix(format!(
+                "{} ({})",
+                revision.title,
+                config.pull_request_url(pull_request.pr_number())
+            ));
+            progress.set_message("Fetching");
+            WorkItem {
+                pull_request,
+                revision,
+                progress,
+            }
+        })
+    });
+
+    do_fetch(opts, jj, gh, config, work).await?;
+    setup.finish_and_clear();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -441,7 +516,8 @@ mod tests {
         super::fetch(
             FetchOptions::default()
                 .with_revset(Some(rev.as_ref()))
-                .with_pull_code(),
+                .with_pull_code()
+                .with_rebase(),
             &mut jj,
             &mut crate::github::fakes::GitHub {
                 pull_requests: std::collections::BTreeMap::from([(

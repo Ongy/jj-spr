@@ -8,8 +8,8 @@
 pub mod adopt;
 pub mod fetch;
 pub mod init;
+pub mod list;
 pub mod push;
 pub mod sync;
-pub mod list;
 #[cfg(test)]
 pub mod tests;
