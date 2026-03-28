@@ -199,6 +199,16 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
+    let multi = indicatif::MultiProgress::new();
+    let setup = multi.add(
+        indicatif::ProgressBar::new(100).with_style(
+            indicatif::ProgressStyle::default_bar()
+                .template("{msg}")
+                .expect("Indicatif template shouldn't fail"),
+        ),
+    );
+
+    setup.set_message("Figuring out what to do");
     let revset = opts
         .revset
         .as_ref()
@@ -215,17 +225,17 @@ where
     )?;
 
     if revisions.is_empty() {
-        crate::output::output(
-            &config.icons.wave,
-            "No commits found - nothing to do. Good bye!",
-        )?;
+        setup.finish_with_message("No commits found - nothing to do. Good bye!");
         return Ok(());
     }
 
+    setup.set_message("Fetching current state from github");
+    jj.run_git_fetch()?;
     let pull_requests = gh
         .pull_requests(revisions.iter().map(|r| r.pull_request_number))
         .await?;
 
+    setup.set_message("Updating local revisions");
     do_fetch(
         opts,
         jj,
@@ -233,7 +243,9 @@ where
         config,
         std::iter::zip(revisions, pull_requests.into_iter()),
     )
-    .await
+    .await?;
+    setup.finish_and_clear();
+    Ok(())
 }
 
 #[cfg(test)]
