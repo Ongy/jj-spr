@@ -63,6 +63,37 @@ impl FetchOptions {
     }
 }
 
+enum WorkEvent<'a> {
+    Rebased(&'a crate::config::Config),
+    Code(&'a crate::config::Config),
+    Title(&'a crate::config::Config),
+    Summary(&'a crate::config::Config),
+}
+
+type WorkLog<'a> = Vec<WorkEvent<'a>>;
+impl<'a> std::fmt::Display for WorkEvent<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (name, icon) = match self {
+            WorkEvent::Rebased(c) => ("Rebased", c.icons.refresh.as_ref()),
+            WorkEvent::Code(c) => ("Updated Code", c.icons.working.as_ref()),
+            WorkEvent::Title(c) => ("Updated Title", c.icons.info.as_ref()),
+            WorkEvent::Summary(c) => ("Updated Summary", c.icons.info.as_ref()),
+        };
+
+        f.write_str(name)?;
+        f.write_str(icon)?;
+        Ok(())
+    }
+}
+
+fn format_worklog(log: &WorkLog, config: &crate::config::Config) -> String {
+    if log.is_empty() {
+        return format!("Nothing to be done {}.", config.icons.sleeping.as_ref());
+    }
+
+    let stringified: Vec<_> = log.iter().map(|e| format!("{}", e)).collect();
+    stringified.join("&")
+}
 struct WorkItem<PR> {
     revision: crate::jj::Revision,
     pull_request: PR,
@@ -84,12 +115,29 @@ where
     let mut items: Vec<_> = commits.into_iter().collect();
 
     for work in items.iter_mut() {
+        let mut log = WorkLog::default();
+
         // Ok, we want to update our local change with any code changes that were done upstream
         if opts.pull_code_changes
             && let Some(old_rev) = work.revision.message.get(&MessageSection::LastCommit)
         {
+            let head_revset = {
+                let head_branch = jj.git_repo.find_branch(
+                    format!(
+                        "{}/{}",
+                        config.remote_name,
+                        work.pull_request.head_branch_name()
+                    )
+                    .as_str(),
+                    git2::BranchType::Remote,
+                )?;
+                RevSet::from_remote_branch(&head_branch, &config.remote_name)?
+            };
+
             if opts.rebase {
                 work.progress.set_message("Rebasing");
+                let revset = crate::jj::RevSet::from(&work.revision.id);
+                let pre_parent = jj.revset_to_change_id(&revset.parent())?;
                 if work.pull_request.base_branch_name() == config.master_ref {
                     // Ok, we want to rebase onto main...
                     // But we don't intend to be based on HEAD but the forkpoint
@@ -106,22 +154,7 @@ where
                         )?;
                         crate::jj::RevSet::from_remote_branch(&branch, &config.remote_name)?
                     };
-                    let head_revset = {
-                        let branch = jj.git_repo.find_branch(
-                            format!(
-                                "{}/{}",
-                                config.remote_name,
-                                work.pull_request.head_branch_name()
-                            )
-                            .as_ref(),
-                            git2::BranchType::Remote,
-                        )?;
-                        crate::jj::RevSet::from_remote_branch(&branch, &config.remote_name)?
-                    };
-                    jj.rebase(
-                        &crate::jj::RevSet::from(&work.revision.id),
-                        &head_revset.fork_point(&base_revset),
-                    )?;
+                    jj.rebase(&revset, &head_revset.fork_point(&base_revset))?;
                 } else {
                     let base_pr = gh
                         .pull_request_by_head(work.pull_request.base_branch_name())
@@ -130,9 +163,14 @@ where
                     let url = config.pull_request_url(base_pr.pr_number());
 
                     jj.rebase(
-                        &crate::jj::RevSet::from(&work.revision.id),
+                        &revset,
                         &RevSet::description(format!("substring:\"{}\"", url)).unique(),
                     )?;
+                }
+                let post_parent = jj.revset_to_change_id(&revset.parent())?;
+
+                if post_parent != pre_parent {
+                    log.push(WorkEvent::Rebased(config));
                 }
             }
 
@@ -141,36 +179,45 @@ where
                 let base_commit = jj.git_repo.find_commit(git2::Oid::from_str(old_rev)?)?;
                 RevSet::from(&base_commit)
             };
-            let head_revset = {
-                let head_branch = jj.git_repo.find_branch(
-                    format!(
-                        "{}/{}",
-                        config.remote_name,
-                        work.pull_request.head_branch_name()
-                    )
-                    .as_str(),
-                    git2::BranchType::Remote,
-                )?;
-                RevSet::from_remote_branch(&head_branch, &config.remote_name)?
-            };
-
-            jj.squash_copy(&base_revset.to(&head_revset), work.revision.id.clone())?;
             let new_latest_commit = jj.resolve_revision_to_commit_id(head_revset.as_ref())?;
-            work.revision
-                .message
-                .insert(MessageSection::LastCommit, new_latest_commit.to_string());
+            if new_latest_commit.to_string() != *old_rev {
+                jj.squash_copy(&base_revset.to(&head_revset), work.revision.id.clone())?;
+                log.push(WorkEvent::Code(config));
+                work.revision
+                    .message
+                    .insert(MessageSection::LastCommit, new_latest_commit.to_string());
+            }
         }
 
         work.progress.set_message("Updating metadata");
-        work.revision
+        if work
+            .revision
             .message
-            .insert(MessageSection::Title, work.pull_request.title().into());
-        work.revision
+            .get(&MessageSection::Title)
+            .map(|t| t != work.pull_request.title())
+            .unwrap_or(true)
+        {
+            work.revision
+                .message
+                .insert(MessageSection::Title, work.pull_request.title().into());
+            log.push(WorkEvent::Title(config));
+        }
+        if work
+            .revision
             .message
-            .insert(MessageSection::Summary, work.pull_request.body().into());
+            .get(&MessageSection::Summary)
+            .map(|t| t != work.pull_request.body())
+            .unwrap_or(true)
+        {
+            work.revision
+                .message
+                .insert(MessageSection::Summary, work.pull_request.body().into());
+            log.push(WorkEvent::Summary(config));
+        }
 
         failure = validate_commit_message(config, &work.revision.message).is_err() || failure;
-        work.progress.finish_with_message("Done");
+        work.progress
+            .finish_with_message(format_worklog(&log, config));
     }
 
     for work in items.into_iter() {
