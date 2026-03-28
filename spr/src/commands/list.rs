@@ -50,8 +50,13 @@ where
             }
         }
         match pr.review_decision() {
-            Some(crate::github::ReviewDecision::ChangesRequested)
-            | Some(crate::github::ReviewDecision::ReviewRequired) => {
+            Some(crate::github::ReviewDecision::ChangesRequested) => {
+                message += config.icons.sparkle.as_ref();
+            }
+            Some(crate::github::ReviewDecision::Approved) if !pr.auto_merge_enabled() => {
+                message += config.icons.sparkle.as_ref();
+            }
+            Some(crate::github::ReviewDecision::ReviewRequired) if pr.reviewers().is_empty() => {
                 message += config.icons.sparkle.as_ref();
             }
             _ => {}

@@ -76,6 +76,7 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for super::types::Pull
                 super::traits::ReviewDecision::Other(o)
             }
         });
+        let auto_merge_enabled = pr.auto_merge_request.is_some();
 
         Self {
             base: pr.base_ref_name,
@@ -89,6 +90,7 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for super::types::Pull
             _assignees: assignees,
             comments,
             review_decision,
+            auto_merge_enabled,
         }
     }
 }
@@ -255,6 +257,7 @@ impl super::GitHubAdapter for &mut GitHub {
             comments: Vec::new(),
             closed: false,
             review_decision: None,
+            auto_merge_enabled: false,
         })
     }
 

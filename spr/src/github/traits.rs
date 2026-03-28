@@ -27,6 +27,7 @@ pub trait GHPullRequest {
     fn reviewers(&self) -> &Vec<String>;
 
     fn review_decision(&self) -> Option<ReviewDecision>;
+    fn auto_merge_enabled(&self) -> bool;
 }
 
 pub trait GitHubAdapter {

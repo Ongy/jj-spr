@@ -21,6 +21,7 @@ impl super::types::PullRequest {
             node: String::new(),
             closed: false,
             review_decision: None,
+            auto_merge_enabled: false,
         }
     }
 }
