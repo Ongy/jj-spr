@@ -236,7 +236,11 @@ where
                         .expect("Indicatif template shouldn't fail"),
                 ),
             );
-            progress.set_prefix(format!("{}", revision.title));
+            progress.set_prefix(format!(
+                "{} ({})",
+                revision.title,
+                config.pull_request_url(pull_request.pr_number())
+            ));
             progress.set_message("Fetching");
             WorkItem {
                 pull_request,
