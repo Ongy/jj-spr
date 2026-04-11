@@ -377,7 +377,7 @@ where
     Ok(seen)
 }
 
-fn prepare_revision_comment<T>(
+fn prepare_revision_comment_inner<T>(
     tree: &crate::tree::Tree<T>,
     config: &crate::config::Config,
 ) -> Vec<String>
@@ -405,7 +405,7 @@ where
     match children.as_slice() {
         [] => {}
         [next] => {
-            lines.extend(prepare_revision_comment(next, config));
+            lines.extend(prepare_revision_comment_inner(next, config));
         }
         // We have more than one child branch.
         // We need to actually build an unicode-art tree
@@ -418,7 +418,7 @@ where
                     .take(child.width() * 2 - 1)
                     .reduce(|l, r| format!("{l}{r}"))
                     .unwrap_or(config.drawing.space.clone());
-                let new_lines = prepare_revision_comment(child, config);
+                let new_lines = prepare_revision_comment_inner(child, config);
                 let old_lines = child_lines.into_iter().enumerate().map(|(i, l)| {
                     format!(
                         "{}{}{}",
@@ -442,12 +442,44 @@ where
     return lines;
 }
 
+fn prepare_revision_comment<T>(
+    tree: &crate::tree::Tree<T>,
+    config: &crate::config::Config,
+) -> Vec<String>
+where
+    T: AsRef<crate::jj::Revision>,
+{
+    if tree.width() == 1 {
+        let mut lines = Vec::with_capacity(tree.len());
+        let mut iter = tree;
+        loop {
+            lines.push(format!(
+                "* {}",
+                config.pull_request_url(iter.get().as_ref().pull_request_number.unwrap_or(0))
+            ));
+
+            if let Some(tree) = iter.get_children().first() {
+                iter = tree;
+            } else {
+                break;
+            }
+        }
+        lines
+    } else {
+        prepare_revision_comment_inner(tree, config)
+    }
+}
+
 fn finalize_revision_comment(
     revision: &crate::jj::Revision,
     config: &crate::config::Config,
     prepared: &Vec<String>,
 ) -> String {
     let mut lines = Vec::new();
+    if prepared.len() == 1 {
+        return String::from("This PR is a standalone change.");
+    }
+
     lines.push(format!(
         "This PR is part of a {} changes series",
         prepared.len()
@@ -456,11 +488,14 @@ fn finalize_revision_comment(
     lines.extend_from_slice(prepared.as_slice());
     if let Some(number) = revision.pull_request_number {
         let pattern = format!("[{}]({})", revision.title, config.pull_request_url(number));
+        let simple_pattern = format!("* {}", config.pull_request_url(number));
         lines = lines
             .into_iter()
             .map(|s| {
                 if s.contains(&pattern) {
                     s.replace(&pattern, &revision.title)
+                } else if s == simple_pattern {
+                    format!("* {}", revision.title)
                 } else {
                     s
                 }
@@ -1945,7 +1980,7 @@ pub mod tests {
 
             assert_eq!(
                 str_lines.as_slice(),
-                &["• [My Title](https://github.com/test_owner/test_repo/pull/1)"],
+                &["* https://github.com/test_owner/test_repo/pull/1"],
                 "Lines didn't match expectation: {str_lines:?}"
             );
         }
@@ -1974,8 +2009,8 @@ pub mod tests {
             assert_eq!(
                 str_lines.as_slice(),
                 &[
-                    "• [My Title](https://github.com/test_owner/test_repo/pull/1)",
-                    "• [My Other Title](https://github.com/test_owner/test_repo/pull/2)"
+                    "* https://github.com/test_owner/test_repo/pull/1",
+                    "* https://github.com/test_owner/test_repo/pull/2"
                 ],
                 "Lines didn't match expectation {str_lines:?}"
             );
