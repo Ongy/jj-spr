@@ -488,11 +488,14 @@ fn finalize_revision_comment(
     lines.extend_from_slice(prepared.as_slice());
     if let Some(number) = revision.pull_request_number {
         let pattern = format!("[{}]({})", revision.title, config.pull_request_url(number));
+        let simple_pattern = format!("* {}", config.pull_request_url(number));
         lines = lines
             .into_iter()
             .map(|s| {
                 if s.contains(&pattern) {
                     s.replace(&pattern, &revision.title)
+                } else if s == simple_pattern {
+                    format!("* {}", revision.title)
                 } else {
                     s
                 }
