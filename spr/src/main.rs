@@ -61,6 +61,9 @@ enum Commands {
 
     /// Create a new branch with the contents of an existing Pull Request
     Adopt(commands::adopt::AdoptOptions),
+
+    /// Remove the PR tracking information form a revision. E.g. to have a "clean" change after adopt.
+    Detach(commands::detach::DetachOptions),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -129,6 +132,7 @@ pub async fn spr() -> Result<()> {
         Commands::Adopt(opts) => commands::adopt::adopt(opts, &mut jj, &mut gh, &config).await?,
         Commands::Push(opts) => commands::push::push(&mut jj, &mut gh, &config, opts).await?,
         Commands::Sync(opts) => commands::sync::sync(&mut jj, &mut gh, &config, opts).await?,
+        Commands::Detach(opts) => commands::detach::detach(&mut jj, &config, opts).await?,
         // The following commands are executed above and return from this
         // function before it reaches this match.
         Commands::Init => (),

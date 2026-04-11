@@ -40,6 +40,13 @@ impl<S: Into<String>> From<S> for ChangeId {
         ChangeId { id: id.into() }
     }
 }
+
+impl Display for ChangeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id.as_ref())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Revision {
     pub id: ChangeId,
