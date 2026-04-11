@@ -5,7 +5,7 @@ use crate::{
     utils::run_command,
 };
 use git2::Oid;
-use std::{io::ErrorKind, iter::zip};
+use std::io::ErrorKind;
 
 #[derive(Debug, clap::Parser, Default)]
 pub struct PushOptions {
@@ -412,27 +412,15 @@ where
         children => {
             let mut child_lines = Vec::new();
             for child in children {
-                let indent = [config.drawing.space.clone()]
-                    .into_iter()
-                    .cycle()
+                let indent: String = std::iter::repeat(config.drawing.space.clone())
                     .take(child.width() * 2 - 1)
-                    .reduce(|l, r| format!("{l}{r}"))
-                    .unwrap_or(config.drawing.space.clone());
+                    .collect();
+                let drawing = std::iter::once(config.drawing.fork.clone())
+                    .chain(std::iter::repeat(config.drawing.cont.clone()));
                 let new_lines = prepare_revision_comment_inner(child, config);
-                let old_lines = child_lines.into_iter().enumerate().map(|(i, l)| {
-                    format!(
-                        "{}{}{}",
-                        if i == 0 {
-                            &config.drawing.fork
-                        } else {
-                            &config.drawing.cont
-                        },
-                        indent,
-                        l
-                    )
-                });
-                child_lines = old_lines.collect();
-                child_lines.extend(new_lines);
+                let old_lines =
+                    std::iter::zip(drawing, child_lines).map(|(i, l)| format!("{i}{indent}{l}",));
+                child_lines = old_lines.chain(new_lines.into_iter()).collect();
             }
 
             lines.extend(child_lines);
@@ -629,17 +617,19 @@ where
         )?;
         crate::jj::RevSet::from_remote_branch(&branch, &config.remote_name)?
     };
-    let work = zip(workset, pull_requests).into_iter().map(|(ws, pr)| {
-        if let Some(ref pr) = pr {
-            ws.progress_bar.set_prefix(format!(
-                "{} ({})",
-                ws.revision.title,
-                config.pull_request_url(pr.pr_number())
-            ));
-        }
-        ws.progress_bar.set_message("Figured out PRs");
-        ws.map(|_| pr)
-    });
+    let work = std::iter::zip(workset, pull_requests)
+        .into_iter()
+        .map(|(ws, pr)| {
+            if let Some(ref pr) = pr {
+                ws.progress_bar.set_prefix(format!(
+                    "{} ({})",
+                    ws.revision.title,
+                    config.pull_request_url(pr.pr_number())
+                ));
+            }
+            ws.progress_bar.set_message("Figured out PRs");
+            ws.map(|_| pr)
+        });
 
     setup.set_message("Pushing revisions");
     let mut actions = do_push(config, jj, &opts, work, &trunk).await?;
