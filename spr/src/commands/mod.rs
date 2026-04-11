@@ -6,6 +6,7 @@
  */
 
 pub mod adopt;
+pub mod detach;
 pub mod fetch;
 pub mod init;
 pub mod list;

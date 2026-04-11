@@ -46,6 +46,7 @@ impl<S: Into<String>> From<S> for ChangeId {
         ChangeId { id: id.into() }
     }
 }
+
 #[derive(Debug, Clone)]
 pub struct Revision {
     pub id: ChangeId,

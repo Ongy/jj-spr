@@ -33,20 +33,19 @@ where
             RevSet::mutable().heads()
         } else {
             RevSet::current()
-        });
+        })
+        .ancestors()
+        .and(&RevSet::mutable())
+        .and(&RevSet::description("glob:\"*Pull Request:*\""));
 
     // We are interested in all revisions that have PRs
-    let revisions = jj.read_revision_range(
-        &revset
-            .ancestors()
-            .and(&RevSet::description("glob:\"*Pull Request:*\"").without(&RevSet::immutable())),
-    )?;
+    let revisions = jj.read_revision_range(&revset)?;
 
     let pull_requests = gh
         .pull_requests(revisions.iter().map(|n| n.pull_request_number))
         .await?;
 
-    for (rev, pr) in zip(revisions, pull_requests).into_iter() {
+    for (rev, pr) in zip(revisions, pull_requests) {
         let pr = if let Some(pr) = pr {
             pr
         } else {
