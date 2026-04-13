@@ -179,7 +179,7 @@ async fn do_push_single<'a, PR, H: AsRef<str>>(
         && git2::Oid::from_str(old)? != head_oid
     {
         return Err(crate::error::Error::new(format!(
-            "Cannot update {}. It has an unexpected upstream.",
+            "Cannot update {}. It has an unexpected upstream.\nUse `--force` to ignore remote changes.\nUse `fetch` to merge upstream changes into local revision.",
             config.pull_request_url(ws.revision.pull_request_number.unwrap_or(0))
         )));
     }
