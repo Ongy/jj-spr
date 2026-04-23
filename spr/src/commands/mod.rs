@@ -9,6 +9,7 @@ pub mod adopt;
 pub mod detach;
 pub mod fetch;
 pub mod init;
+pub mod list;
 pub mod push;
 pub mod sync;
 #[cfg(test)]

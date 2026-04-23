@@ -19,6 +19,12 @@ fragment PR on PullRequest {
   headRefName
   closed
   merged
+  reviewDecision
+  # We don't use any member of this, but I don't know how to just get the exists/is missing in graphql
+  autoMergeRequest {
+    commitBody
+    commitHeadline
+  }
   comments(first: 100) {
     nodes {
       body

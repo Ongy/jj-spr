@@ -13,10 +13,12 @@ pub struct PullRequest {
     pub node: String,
     pub title: String,
     pub body: String,
-    pub _reviewers: Vec<String>,
+    pub reviewers: Vec<String>,
     pub _assignees: Vec<String>,
     pub comments: Vec<PullRequestComment>,
     pub closed: bool,
+    pub review_decision: Option<super::traits::ReviewDecision>,
+    pub auto_merge_enabled: bool,
 }
 
 impl super::GithubPRComment for PullRequestComment {
@@ -62,5 +64,17 @@ impl super::GHPullRequest for PullRequest {
 
     fn comments(&self) -> Vec<Self::PRComment> {
         self.comments.clone()
+    }
+
+    fn reviewers(&self) -> &Vec<String> {
+        &self.reviewers
+    }
+
+    fn review_decision(&self) -> Option<super::traits::ReviewDecision> {
+        self.review_decision.clone()
+    }
+
+    fn auto_merge_enabled(&self) -> bool {
+        self.auto_merge_enabled
     }
 }

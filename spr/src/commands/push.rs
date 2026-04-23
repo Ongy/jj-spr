@@ -1882,7 +1882,7 @@ pub mod tests {
                 .pull_requests
                 .get(&1)
                 .expect("Push must have created PR")
-                ._reviewers
+                .reviewers
                 .iter()
                 .map(|s| s.as_str())
                 .collect();

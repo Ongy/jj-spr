@@ -29,6 +29,12 @@ pub struct ChangeId {
     id: String,
 }
 
+impl Display for ChangeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id.as_ref())
+    }
+}
+
 impl AsRef<str> for ChangeId {
     fn as_ref(&self) -> &str {
         return self.id.as_ref();
@@ -38,12 +44,6 @@ impl AsRef<str> for ChangeId {
 impl<S: Into<String>> From<S> for ChangeId {
     fn from(id: S) -> Self {
         ChangeId { id: id.into() }
-    }
-}
-
-impl Display for ChangeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.id.as_ref())
     }
 }
 
@@ -232,6 +232,11 @@ impl RevSet {
     // Unary
     pub fn ancestors(&self) -> Self {
         RevSet(format!("::({})", self.0))
+    }
+
+    // Unary
+    pub fn ancestors_limited(&self, count: u64) -> Self {
+        RevSet(format!("ancestors({}, {})", self.0, count))
     }
 
     pub fn parent(&self) -> Self {

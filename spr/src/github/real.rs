@@ -62,6 +62,22 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for super::types::Pull
             })
             .collect();
 
+        let review_decision = pr.review_decision.map(|rd| match rd {
+            old_comments::PullRequestReviewDecision::APPROVED => {
+                super::traits::ReviewDecision::Approved
+            }
+            old_comments::PullRequestReviewDecision::CHANGES_REQUESTED => {
+                super::traits::ReviewDecision::ChangesRequested
+            }
+            old_comments::PullRequestReviewDecision::REVIEW_REQUIRED => {
+                super::traits::ReviewDecision::ReviewRequired
+            }
+            old_comments::PullRequestReviewDecision::Other(o) => {
+                super::traits::ReviewDecision::Other(o)
+            }
+        });
+        let auto_merge_enabled = pr.auto_merge_request.is_some();
+
         Self {
             base: pr.base_ref_name,
             head: pr.head_ref_name,
@@ -70,9 +86,11 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for super::types::Pull
             body: pr.body,
             title: pr.title,
             closed: pr.closed,
-            _reviewers: reviewers,
+            reviewers,
             _assignees: assignees,
             comments,
+            review_decision,
+            auto_merge_enabled,
         }
     }
 }
@@ -234,10 +252,12 @@ impl super::GitHubAdapter for &mut GitHub {
             number: octo_pr.number,
             title: octo_pr.title.unwrap_or(String::new()),
             body: octo_pr.body.unwrap_or(String::new()),
-            _reviewers: Vec::new(),
+            reviewers: Vec::new(),
             _assignees: Vec::new(),
             comments: Vec::new(),
             closed: false,
+            review_decision: None,
+            auto_merge_enabled: false,
         })
     }
 
