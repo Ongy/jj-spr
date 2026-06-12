@@ -119,6 +119,7 @@ where
 
         // Ok, we want to update our local change with any code changes that were done upstream
         if opts.pull_code_changes
+            && !work.pull_request.closed()
             && let Some(old_rev) = work.revision.message.get(&MessageSection::LastCommit)
         {
             let head_revset = {
