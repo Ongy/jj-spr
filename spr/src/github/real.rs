@@ -70,6 +70,7 @@ impl From<old_comments::OldCommentsRepositoryPullRequest> for super::types::Pull
             body: pr.body,
             title: pr.title,
             closed: pr.closed,
+            draft: pr.is_draft,
             _reviewers: reviewers,
             _assignees: assignees,
             comments,
@@ -238,6 +239,7 @@ impl super::GitHubAdapter for &mut GitHub {
             _assignees: Vec::new(),
             comments: Vec::new(),
             closed: false,
+            draft,
         })
     }
 

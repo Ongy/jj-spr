@@ -17,6 +17,7 @@ pub struct PullRequest {
     pub _assignees: Vec<String>,
     pub comments: Vec<PullRequestComment>,
     pub closed: bool,
+    pub draft: bool,
 }
 
 impl super::GithubPRComment for PullRequestComment {

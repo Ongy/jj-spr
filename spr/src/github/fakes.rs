@@ -20,6 +20,7 @@ impl super::types::PullRequest {
             comments: Vec::new(),
             node: String::new(),
             closed: false,
+            draft: false,
         }
     }
 }
@@ -67,7 +68,7 @@ impl super::GitHubAdapter for &mut GitHub {
         body: Sb,
         base_ref_name: B,
         head_ref_name: H,
-        _draft: bool,
+        draft: bool,
     ) -> crate::error::Result<Self::PRAdapter>
     where
         H: AsRef<str>,
@@ -81,13 +82,14 @@ impl super::GitHubAdapter for &mut GitHub {
             .map(|(k, _)| *k)
             .max()
             .unwrap_or(0);
-        let pr = Self::PRAdapter::new(
+        let mut pr = Self::PRAdapter::new(
             base_ref_name.as_ref(),
             head_ref_name.as_ref(),
             max + 1,
             title,
             body,
         );
+        pr.draft = draft;
 
         self.pull_requests.insert(pr.number, pr.clone());
 
