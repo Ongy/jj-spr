@@ -15,7 +15,7 @@ jj-spr is written in Rust. You need a Rust toolchain to build from source. See [
 ```shell
 git clone https://github.com/Ongy/jj-spr.git
 cd jj-spr
-cargo install --path spr
+cargo install --locked --path spr
 ```
 
 This will install the `jj-spr` binary to your `~/.cargo/bin` directory.
