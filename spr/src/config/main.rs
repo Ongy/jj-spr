@@ -648,5 +648,24 @@ mod tests {
             let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
             assert_eq!(parsed.drawing.space, " ");
         }
+
+        #[test]
+        fn test_parse_push_draft() {
+            let (_tmpdir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.config_set("spr.push.draft", "true", false)
+                .expect("Failed to set spr.push.draft");
+
+            let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
+            assert!(parsed.push.draft);
+        }
+
+        #[test]
+        fn test_parse_push_draft_default() {
+            let (_tmpdir, jj, _) = testing::setup::repo_with_origin();
+
+            let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
+            assert!(!parsed.push.draft);
+        }
     }
 }

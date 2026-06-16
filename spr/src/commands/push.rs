@@ -26,6 +26,9 @@ pub struct PushOptions {
 
     #[clap(long)]
     fix: Option<bool>,
+
+    #[clap(long, num_args = 0..=1, default_missing_value = "true")]
+    pub draft: Option<bool>,
 }
 
 #[cfg(test)]
@@ -58,6 +61,11 @@ impl PushOptions {
 
     pub fn with_existing(mut self, val: bool) -> Self {
         self.existing = val;
+        self
+    }
+
+    pub fn with_draft(mut self, val: bool) -> Self {
+        self.draft = Some(val);
         self
     }
 }
@@ -504,6 +512,7 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
+    let draft = opts.draft.unwrap_or(config.push.draft);
     let multi = indicatif::MultiProgress::new();
     let setup = multi.add(
         indicatif::ProgressBar::new(100).with_style(
@@ -671,7 +680,7 @@ where
                 body,
                 &workset.pull_request.base_branch,
                 &workset.pull_request.head_branch,
-                false,
+                draft,
             )
             .await?;
 
@@ -2451,5 +2460,97 @@ pub mod tests {
                 == pr2_oid,
             "PR 1 should be based on PR 2"
         );
+    }
+
+    #[test]
+    fn test_push_options_parsing() {
+        use clap::Parser;
+
+        let opts = super::PushOptions::try_parse_from(&["spr"]).unwrap();
+        assert_eq!(opts.draft, None);
+
+        let opts = super::PushOptions::try_parse_from(&["spr", "--draft"]).unwrap();
+        assert_eq!(opts.draft, Some(true));
+
+        let opts = super::PushOptions::try_parse_from(&["spr", "--draft=true"]).unwrap();
+        assert_eq!(opts.draft, Some(true));
+
+        let opts = super::PushOptions::try_parse_from(&["spr", "--draft=false"]).unwrap();
+        assert_eq!(opts.draft, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_push_draft_cli_override() {
+        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+
+        super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_draft(true),
+        )
+        .await
+        .expect("Push failed");
+
+        assert_eq!(gh.pull_requests.len(), 1);
+        let pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
+        assert!(pr.draft, "PR should be a draft");
+    }
+
+    #[tokio::test]
+    async fn test_push_draft_config_fallback() {
+        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+        let mut config = testing::config::basic();
+        config.push.draft = true;
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+
+        super::push(
+            &mut jj,
+            &mut gh,
+            &config,
+            super::PushOptions::default(),
+        )
+        .await
+        .expect("Push failed");
+
+        assert_eq!(gh.pull_requests.len(), 1);
+        let pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
+        assert!(pr.draft, "PR should be a draft");
+    }
+
+    #[tokio::test]
+    async fn test_push_draft_cli_override_false() {
+        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+        let mut config = testing::config::basic();
+        config.push.draft = true;
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+
+        super::push(
+            &mut jj,
+            &mut gh,
+            &config,
+            super::PushOptions::default().with_draft(false),
+        )
+        .await
+        .expect("Push failed");
+
+        assert_eq!(gh.pull_requests.len(), 1);
+        let pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
+        assert!(!pr.draft, "PR should NOT be a draft");
     }
 }
