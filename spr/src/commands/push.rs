@@ -29,6 +29,12 @@ pub struct PushOptions {
 
     #[clap(long, num_args = 0..=1, default_missing_value = "true")]
     pub draft: Option<bool>,
+
+    #[clap(long, num_args = 0..=1, default_missing_value = "true")]
+    pub update_only: Option<bool>,
+
+    #[clap(long, num_args = 0..=1, default_missing_value = "true")]
+    pub modify_comment: Option<bool>,
 }
 
 #[cfg(test)]
@@ -66,6 +72,16 @@ impl PushOptions {
 
     pub fn with_draft(mut self, val: bool) -> Self {
         self.draft = Some(val);
+        self
+    }
+
+    pub fn with_update_only(mut self, val: bool) -> Self {
+        self.update_only = Some(val);
+        self
+    }
+
+    pub fn with_modify_comment(mut self, val: bool) -> Self {
+        self.modify_comment = Some(val);
         self
     }
 }
@@ -622,6 +638,13 @@ where
         .pull_requests(workset.iter().map(|ws| ws.revision.pull_request_number))
         .await?;
 
+    let update_only = opts.update_only.unwrap_or(config.push.update_only);
+    if update_only && pull_requests.iter().any(|pr| pr.is_none()) {
+        return Err(Error::new(
+            "Cannot create new pull requests because --update-only is enabled",
+        ));
+    }
+
     let trunk = {
         let branch = jj.git_repo.find_branch(
             format!("{}/{}", config.remote_name, config.master_ref).as_ref(),
@@ -739,23 +762,26 @@ where
         forest.insert_below(&|p| p.revision.id == parent, ws.map(|ba| ba.old_pr));
     }
 
-    setup.set_message("Updating tree overviews");
-    for tree in forest.into_trees() {
-        let prepared = prepare_revision_comment(&tree, config);
-        for workset in tree.into_iter() {
-            match workset.pull_request {
-                Some(ref pr) => {
-                    let content = finalize_revision_comment(&workset.revision, config, &prepared);
-                    gh.update_pr_comment(pr, &content).await?;
-                }
-                None => {
-                    crate::output::output(
-                        &config.icons.error,
-                        format!(
-                            "Change {:?} has no PR attached. This is a bug at this point",
-                            workset.revision.id
-                        ),
-                    )?;
+    let modify_comment = opts.modify_comment.unwrap_or(config.push.modify_comment);
+    if modify_comment {
+        setup.set_message("Updating tree overviews");
+        for tree in forest.into_trees() {
+            let prepared = prepare_revision_comment(&tree, config);
+            for workset in tree.into_iter() {
+                match workset.pull_request {
+                    Some(ref pr) => {
+                        let content = finalize_revision_comment(&workset.revision, config, &prepared);
+                        gh.update_pr_comment(pr, &content).await?;
+                    }
+                    None => {
+                        crate::output::output(
+                            &config.icons.error,
+                            format!(
+                                "Change {:?} has no PR attached. This is a bug at this point",
+                                workset.revision.id
+                            ),
+                        )?;
+                    }
                 }
             }
         }
@@ -2552,5 +2578,112 @@ pub mod tests {
         assert_eq!(gh.pull_requests.len(), 1);
         let pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
         assert!(!pr.draft, "PR should NOT be a draft");
+    }
+
+    #[tokio::test]
+    async fn test_update_only_fails_when_pr_does_not_exist() {
+        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        let res = super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_update_only(true).with_message(Some("message")),
+        )
+        .await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("Cannot create new pull requests because --update-only is enabled"),
+            "Expected error message to contain update-only failure string, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_only_succeeds_when_pr_exists() {
+        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_message(Some("message")),
+        )
+        .await
+        .expect("initial push should succeed");
+
+        amend_jujutsu_revision(&mut jj, "file 2");
+
+        super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_update_only(true).with_message(Some("message")),
+        )
+        .await
+        .expect("push with --update-only should succeed when PR exists");
+    }
+
+    #[tokio::test]
+    async fn test_modify_comment_false_skips_overview_comment() {
+        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default()
+                .with_modify_comment(false)
+                .with_message(Some("message")),
+        )
+        .await
+        .expect("push should succeed");
+
+        let pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
+        assert!(
+            pr.comments.is_empty(),
+            "Expected no overview comments when modify_comment is false"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_modify_comment_config_fallback() {
+        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        let mut config = testing::config::basic();
+        config.push.modify_comment = false;
+
+        super::push(
+            &mut jj,
+            &mut gh,
+            &config,
+            super::PushOptions::default().with_message(Some("message")),
+        )
+        .await
+        .expect("push should succeed");
+
+        let pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
+        assert!(
+            pr.comments.is_empty(),
+            "Expected no overview comments when config.push.modify_comment is false"
+        );
     }
 }

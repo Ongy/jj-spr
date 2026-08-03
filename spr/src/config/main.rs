@@ -667,5 +667,37 @@ mod tests {
             let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
             assert!(!parsed.push.draft);
         }
+
+        #[test]
+        fn test_parse_push_update_only() {
+            let (_tmpdir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.config_set("spr.push.updateOnly", "true", false)
+                .expect("Failed to set spr.push.updateOnly");
+
+            let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
+            assert!(parsed.push.update_only);
+        }
+
+        #[test]
+        fn test_parse_push_modify_comment() {
+            let (_tmpdir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.config_set("spr.push.modifyComment", "false", false)
+                .expect("Failed to set spr.push.modifyComment");
+
+            let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
+            assert!(!parsed.push.modify_comment);
+        }
+
+        #[test]
+        fn test_parse_push_new_flags_defaults() {
+            let (_tmpdir, jj, _) = testing::setup::repo_with_origin();
+
+            let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
+            assert!(!parsed.push.update_only);
+            assert!(parsed.push.modify_comment);
+        }
     }
 }
+
