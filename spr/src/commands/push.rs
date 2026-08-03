@@ -744,6 +744,26 @@ where
         ws.progress_bar
             .finish_with_message(ws.format_worklog(config));
     }
+    let modify_comment = opts.modify_comment.unwrap_or(config.push.modify_comment);
+    if modify_comment {
+        update_tree_overviews(&mut gh, config, actions, &setup).await?;
+    }
+    setup.finish_and_clear();
+
+    Ok(())
+}
+
+async fn update_tree_overviews<'a, GH, PR, I>(
+    gh: &mut GH,
+    config: &'a crate::config::Config,
+    actions: I,
+    setup: &indicatif::ProgressBar,
+) -> Result<()>
+where
+    PR: crate::github::GHPullRequest,
+    GH: crate::github::GitHubAdapter<PRAdapter = PR>,
+    I: IntoIterator<Item = WorkSet<'a, BranchAction<PR>>>,
+{
     setup.set_message("Figuring out PR tree");
 
     let mut forest: crate::tree::Forest<WorkSet<'_, Option<PR>>> = crate::tree::Forest::new();
@@ -752,7 +772,7 @@ where
             .revision
             .parent_ids
             .first()
-            .map(|p| p.clone())
+            .cloned()
             .ok_or_else(|| {
                 crate::error::Error::new(format!(
                     "Found reivions {:?} in postprocessing that has no parents..?",
@@ -762,31 +782,25 @@ where
         forest.insert_below(&|p| p.revision.id == parent, ws.map(|ba| ba.old_pr));
     }
 
-    let modify_comment = opts.modify_comment.unwrap_or(config.push.modify_comment);
-    if modify_comment {
-        setup.set_message("Updating tree overviews");
-        for tree in forest.into_trees() {
-            let prepared = prepare_revision_comment(&tree, config);
-            for workset in tree.into_iter() {
-                match workset.pull_request {
-                    Some(ref pr) => {
-                        let content = finalize_revision_comment(&workset.revision, config, &prepared);
-                        gh.update_pr_comment(pr, &content).await?;
-                    }
-                    None => {
-                        crate::output::output(
-                            &config.icons.error,
-                            format!(
-                                "Change {:?} has no PR attached. This is a bug at this point",
-                                workset.revision.id
-                            ),
-                        )?;
-                    }
-                }
-            }
+    setup.set_message("Updating tree overviews");
+    for tree in forest.into_trees() {
+        let prepared = prepare_revision_comment(&tree, config);
+        for workset in tree.into_iter() {
+            let Some(ref pr) = workset.pull_request else {
+                crate::output::output(
+                    &config.icons.error,
+                    format!(
+                        "Change {:?} has no PR attached. This is a bug at this point",
+                        workset.revision.id
+                    ),
+                )?;
+                continue;
+            };
+
+            let content = finalize_revision_comment(&workset.revision, config, &prepared);
+            gh.update_pr_comment(pr, &content).await?;
         }
     }
-    setup.finish_and_clear();
 
     Ok(())
 }
