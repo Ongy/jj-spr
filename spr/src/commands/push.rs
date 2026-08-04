@@ -1,4 +1,5 @@
 use crate::{
+    config::push::CommentMode,
     error::{Error, Result, ResultExt},
     jj::RevSet,
     message::{MessageSection, build_github_body},
@@ -32,6 +33,9 @@ pub struct PushOptions {
 
     #[clap(long, num_args = 0..=1, default_missing_value = "true")]
     pub update_only: Option<bool>,
+
+    #[clap(long, value_enum)]
+    pub modify_comment: Option<CommentMode>,
 }
 
 #[cfg(test)]
@@ -74,6 +78,11 @@ impl PushOptions {
 
     pub fn with_update_only(mut self, val: bool) -> Self {
         self.update_only = Some(val);
+        self
+    }
+
+    pub fn with_modify_comment(mut self, val: CommentMode) -> Self {
+        self.modify_comment = Some(val);
         self
     }
 }
@@ -755,22 +764,31 @@ where
     }
 
     setup.set_message("Updating tree overviews");
+    let comment_mode = opts.modify_comment.unwrap_or(config.push.modify_comment);
     for tree in forest.into_trees() {
         let prepared = prepare_revision_comment(&tree, config);
-        for workset in tree.into_iter() {
-            match workset.pull_request {
-                Some(ref pr) => {
-                    let content = finalize_revision_comment(&workset.revision, config, &prepared);
-                    gh.update_pr_comment(pr, &content).await?;
-                }
-                None => {
-                    crate::output::output(
-                        &config.icons.error,
-                        format!(
-                            "Change {:?} has no PR attached. This is a bug at this point",
-                            workset.revision.id
-                        ),
-                    )?;
+        let should_update = match comment_mode {
+            CommentMode::Off => false,
+            CommentMode::On => true,
+            CommentMode::Auto => prepared.len() > 1,
+        };
+        if should_update {
+            for workset in tree.into_iter() {
+                match workset.pull_request {
+                    Some(ref pr) => {
+                        let content =
+                            finalize_revision_comment(&workset.revision, config, &prepared);
+                        gh.update_pr_comment(pr, &content).await?;
+                    }
+                    None => {
+                        crate::output::output(
+                            &config.icons.error,
+                            format!(
+                                "Change {:?} has no PR attached. This is a bug at this point",
+                                workset.revision.id
+                            ),
+                        )?;
+                    }
                 }
             }
         }
@@ -2143,6 +2161,7 @@ pub mod tests {
 
     mod overview_comments {
         use crate::testing;
+        use crate::config::push::CommentMode;
 
         #[tokio::test]
         async fn creates_comment() {
@@ -2161,7 +2180,9 @@ pub mod tests {
                 &mut jj,
                 &mut gh,
                 &testing::config::basic(),
-                super::super::PushOptions::default().with_message(Some("message")),
+                super::super::PushOptions::default()
+                    .with_message(Some("message"))
+                    .with_modify_comment(CommentMode::On),
             )
             .await
             .expect("stacked shouldn't fail");
@@ -2207,7 +2228,9 @@ pub mod tests {
                 &mut jj,
                 &mut gh,
                 &testing::config::basic(),
-                super::super::PushOptions::default().with_message(Some("message")),
+                super::super::PushOptions::default()
+                    .with_message(Some("message"))
+                    .with_modify_comment(CommentMode::On),
             )
             .await
             .expect("stacked shouldn't fail");
@@ -2215,7 +2238,9 @@ pub mod tests {
                 &mut jj,
                 &mut gh,
                 &testing::config::basic(),
-                super::super::PushOptions::default().with_message(Some("message")),
+                super::super::PushOptions::default()
+                    .with_message(Some("message"))
+                    .with_modify_comment(CommentMode::On),
             )
             .await
             .expect("stacked shouldn't fail");
@@ -2277,7 +2302,9 @@ pub mod tests {
                 &mut jj,
                 &mut gh,
                 &testing::config::basic(),
-                super::super::PushOptions::default().with_message(Some("message")),
+                super::super::PushOptions::default()
+                    .with_message(Some("message"))
+                    .with_modify_comment(CommentMode::On),
             )
             .await
             .expect("stacked shouldn't fail");
@@ -2308,6 +2335,80 @@ pub mod tests {
                 "Updated unrelated comment\nHad {} comment(s)",
                 comments.len()
             );
+        }
+
+        #[tokio::test]
+        async fn test_comment_mode_auto_single_commit() {
+            let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default()
+                    .with_message(Some("message"))
+                    .with_modify_comment(CommentMode::Auto),
+            )
+            .await
+            .expect("push should succeed");
+
+            let comments = gh.pull_requests.get(&1).unwrap().comments.clone();
+            assert!(comments.is_empty(), "Auto mode on single commit should not add overview comment");
+        }
+
+        #[tokio::test]
+        async fn test_comment_mode_auto_stacked_commits() {
+            let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit 1", "file 1");
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit 2", "file 2");
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default()
+                    .with_message(Some("message"))
+                    .with_modify_comment(CommentMode::Auto),
+            )
+            .await
+            .expect("push should succeed");
+
+            let comments1 = gh.pull_requests.get(&1).unwrap().comments.clone();
+            assert!(!comments1.is_empty(), "Auto mode on stacked commits should add overview comment to PR 1");
+            let comments2 = gh.pull_requests.get(&2).unwrap().comments.clone();
+            assert!(!comments2.is_empty(), "Auto mode on stacked commits should add overview comment to PR 2");
+        }
+
+        #[tokio::test]
+        async fn test_comment_mode_off_stacked_commits() {
+            let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit 1", "file 1");
+            let _ = super::create_jujutsu_commit(&mut jj, "Test commit 2", "file 2");
+
+            let mut gh = crate::github::fakes::GitHub {
+                pull_requests: std::collections::BTreeMap::new(),
+            };
+            super::super::push(
+                &mut jj,
+                &mut gh,
+                &testing::config::basic(),
+                super::super::PushOptions::default()
+                    .with_message(Some("message"))
+                    .with_modify_comment(CommentMode::Off),
+            )
+            .await
+            .expect("push should succeed");
+
+            for (_id, pr) in gh.pull_requests.iter() {
+                assert!(pr.comments.is_empty(), "Off mode should not add overview comments");
+            }
         }
     }
 
