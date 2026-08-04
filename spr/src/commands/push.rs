@@ -32,9 +32,6 @@ pub struct PushOptions {
 
     #[clap(long, num_args = 0..=1, default_missing_value = "true")]
     pub update_only: Option<bool>,
-
-    #[clap(long, num_args = 0..=1, default_missing_value = "true")]
-    pub modify_comment: Option<bool>,
 }
 
 #[cfg(test)]
@@ -77,11 +74,6 @@ impl PushOptions {
 
     pub fn with_update_only(mut self, val: bool) -> Self {
         self.update_only = Some(val);
-        self
-    }
-
-    pub fn with_modify_comment(mut self, val: bool) -> Self {
-        self.modify_comment = Some(val);
         self
     }
 }
@@ -744,26 +736,6 @@ where
         ws.progress_bar
             .finish_with_message(ws.format_worklog(config));
     }
-    let modify_comment = opts.modify_comment.unwrap_or(config.push.modify_comment);
-    if modify_comment {
-        update_tree_overviews(&mut gh, config, actions, &setup).await?;
-    }
-    setup.finish_and_clear();
-
-    Ok(())
-}
-
-async fn update_tree_overviews<'a, GH, PR, I>(
-    gh: &mut GH,
-    config: &'a crate::config::Config,
-    actions: I,
-    setup: &indicatif::ProgressBar,
-) -> Result<()>
-where
-    PR: crate::github::GHPullRequest,
-    GH: crate::github::GitHubAdapter<PRAdapter = PR>,
-    I: IntoIterator<Item = WorkSet<'a, BranchAction<PR>>>,
-{
     setup.set_message("Figuring out PR tree");
 
     let mut forest: crate::tree::Forest<WorkSet<'_, Option<PR>>> = crate::tree::Forest::new();
@@ -772,7 +744,7 @@ where
             .revision
             .parent_ids
             .first()
-            .cloned()
+            .map(|p| p.clone())
             .ok_or_else(|| {
                 crate::error::Error::new(format!(
                     "Found reivions {:?} in postprocessing that has no parents..?",
@@ -786,21 +758,24 @@ where
     for tree in forest.into_trees() {
         let prepared = prepare_revision_comment(&tree, config);
         for workset in tree.into_iter() {
-            let Some(ref pr) = workset.pull_request else {
-                crate::output::output(
-                    &config.icons.error,
-                    format!(
-                        "Change {:?} has no PR attached. This is a bug at this point",
-                        workset.revision.id
-                    ),
-                )?;
-                continue;
-            };
-
-            let content = finalize_revision_comment(&workset.revision, config, &prepared);
-            gh.update_pr_comment(pr, &content).await?;
+            match workset.pull_request {
+                Some(ref pr) => {
+                    let content = finalize_revision_comment(&workset.revision, config, &prepared);
+                    gh.update_pr_comment(pr, &content).await?;
+                }
+                None => {
+                    crate::output::output(
+                        &config.icons.error,
+                        format!(
+                            "Change {:?} has no PR attached. This is a bug at this point",
+                            workset.revision.id
+                        ),
+                    )?;
+                }
+            }
         }
     }
+    setup.finish_and_clear();
 
     Ok(())
 }
@@ -2646,58 +2621,5 @@ pub mod tests {
         )
         .await
         .expect("push with --update-only should succeed when PR exists");
-    }
-
-    #[tokio::test]
-    async fn test_modify_comment_false_skips_overview_comment() {
-        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
-        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-
-        let mut gh = crate::github::fakes::GitHub {
-            pull_requests: std::collections::BTreeMap::new(),
-        };
-        super::push(
-            &mut jj,
-            &mut gh,
-            &testing::config::basic(),
-            super::PushOptions::default()
-                .with_modify_comment(false)
-                .with_message(Some("message")),
-        )
-        .await
-        .expect("push should succeed");
-
-        let pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
-        assert!(
-            pr.comments.is_empty(),
-            "Expected no overview comments when modify_comment is false"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_modify_comment_config_fallback() {
-        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
-        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
-
-        let mut gh = crate::github::fakes::GitHub {
-            pull_requests: std::collections::BTreeMap::new(),
-        };
-        let mut config = testing::config::basic();
-        config.push.modify_comment = false;
-
-        super::push(
-            &mut jj,
-            &mut gh,
-            &config,
-            super::PushOptions::default().with_message(Some("message")),
-        )
-        .await
-        .expect("push should succeed");
-
-        let pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
-        assert!(
-            pr.comments.is_empty(),
-            "Expected no overview comments when config.push.modify_comment is false"
-        );
     }
 }
