@@ -29,6 +29,9 @@ pub struct PushOptions {
 
     #[clap(long, num_args = 0..=1, default_missing_value = "true")]
     pub draft: Option<bool>,
+
+    #[clap(long, num_args = 0..=1, default_missing_value = "true")]
+    pub update_only: Option<bool>,
 }
 
 #[cfg(test)]
@@ -66,6 +69,11 @@ impl PushOptions {
 
     pub fn with_draft(mut self, val: bool) -> Self {
         self.draft = Some(val);
+        self
+    }
+
+    pub fn with_update_only(mut self, val: bool) -> Self {
+        self.update_only = Some(val);
         self
     }
 }
@@ -621,6 +629,13 @@ where
     let pull_requests = gh
         .pull_requests(workset.iter().map(|ws| ws.revision.pull_request_number))
         .await?;
+
+    let update_only = opts.update_only.unwrap_or(config.push.update_only);
+    if update_only && pull_requests.iter().any(|pr| pr.is_none()) {
+        return Err(Error::new(
+            "Cannot create new pull requests because --update-only is enabled",
+        ));
+    }
 
     let trunk = {
         let branch = jj.git_repo.find_branch(
@@ -2552,5 +2567,59 @@ pub mod tests {
         assert_eq!(gh.pull_requests.len(), 1);
         let pr = gh.pull_requests.get(&1).expect("PR 1 should exist");
         assert!(!pr.draft, "PR should NOT be a draft");
+    }
+
+    #[tokio::test]
+    async fn test_update_only_fails_when_pr_does_not_exist() {
+        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        let res = super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_update_only(true).with_message(Some("message")),
+        )
+        .await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("Cannot create new pull requests because --update-only is enabled"),
+            "Expected error message to contain update-only failure string, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_only_succeeds_when_pr_exists() {
+        let (_temp_dir, mut jj, _bare) = testing::setup::repo_with_origin();
+        let _ = create_jujutsu_commit(&mut jj, "Test commit", "file 1");
+
+        let mut gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::new(),
+        };
+        super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_message(Some("message")),
+        )
+        .await
+        .expect("initial push should succeed");
+
+        amend_jujutsu_revision(&mut jj, "file 2");
+
+        super::push(
+            &mut jj,
+            &mut gh,
+            &testing::config::basic(),
+            super::PushOptions::default().with_update_only(true).with_message(Some("message")),
+        )
+        .await
+        .expect("push with --update-only should succeed when PR exists");
     }
 }

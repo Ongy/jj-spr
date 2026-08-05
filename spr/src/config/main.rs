@@ -667,5 +667,17 @@ mod tests {
             let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
             assert!(!parsed.push.draft);
         }
+
+        #[test]
+        fn test_parse_push_update_only() {
+            let (_tmpdir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.config_set("spr.push.updateOnly", "true", false)
+                .expect("Failed to set spr.push.updateOnly");
+
+            let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
+            assert!(parsed.push.update_only);
+        }
     }
 }
+
