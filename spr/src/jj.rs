@@ -459,7 +459,7 @@ impl Jujutsu {
             .context(String::from("Create new for derived commit"))?;
 
         let change = self
-            .revset_to_change_id(&RevSet::from_arg("heads(at_operation(@-, ..)..)"))
+            .revset_to_change_id(&RevSet::from_arg("at_operation(@-, ..).."))
             .context(String::from("Read change_id from last operation"))?;
 
         self.restore(
