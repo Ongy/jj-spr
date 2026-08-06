@@ -678,6 +678,18 @@ mod tests {
             let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
             assert!(parsed.push.update_only);
         }
+
+        #[test]
+        fn test_parse_push_modify_comment() {
+            let (_tmpdir, mut jj, _) = testing::setup::repo_with_origin();
+
+            jj.config_set("spr.push.modifyComment", "off", false)
+                .expect("Failed to set spr.push.modifyComment");
+
+            let parsed = parsed_from_jj(&jj).expect("Shouldn't fail to parse config");
+            assert_eq!(parsed.push.modify_comment, crate::config::push::CommentMode::Off);
+        }
     }
 }
+
 
