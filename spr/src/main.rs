@@ -9,13 +9,29 @@
 //! local Jujutsu commits that may be amended and rebased. Pull Requests can be
 //! stacked to allow for a series of code reviews of interdependent code.
 
+use std::{pin::Pin, str::FromStr, sync::Arc, time::Duration};
+
 use clap::{Parser, Subcommand};
 use jj_spr::{
     commands,
     config::{self, get_auth_token},
     error::{Error, Result, ResultExt},
 };
-use reqwest::{self, header};
+
+use octocrab::service::middleware::{auth_header::AuthHeaderLayer, base_uri::BaseUriLayer};
+use octocrab::{AuthState, service::middleware::extra_headers::ExtraHeadersLayer};
+
+use bytes::Bytes;
+use http::{HeaderMap, Response};
+use http::{HeaderValue, Uri, header::HeaderName};
+use http::{Request, header::USER_AGENT};
+use hyper_tls::HttpsConnector;
+use tower_http::classify::ServerErrorsFailureClass;
+use tower_layer::Layer;
+use tracing::Span;
+
+const GITHUB_BASE_URI: &str = "https://api.github.com";
+const GITHUB_BASE_UPLOAD_URI: &str = "https://uploads.github.com";
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -42,6 +58,39 @@ pub struct Cli {
 
     #[clap(subcommand)]
     command: Commands,
+}
+
+struct DebugBody<B> {
+    inner: std::pin::Pin<Box<B>>,
+}
+
+impl<B> DebugBody<B> {
+    fn new(b: B) -> Self {
+        DebugBody { inner: Box::pin(b) }
+    }
+}
+
+impl<B> http_body::Body for DebugBody<B>
+where
+    B: http_body::Body<Data = Bytes>,
+{
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<std::result::Result<http_body::Frame<Self::Data>, Self::Error>>>
+    {
+        let s = Pin::into_inner(self);
+        std::pin::pin!(&mut s.inner).poll_frame(cx).map_ok(|f| {
+            if let Some(d) = f.data_ref() {
+                println!("sending {} bytes", d.len());
+                hexdump::hexdump(d);
+            }
+            f
+        })
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -92,28 +141,72 @@ pub async fn spr() -> Result<()> {
             .ok_or_else(|| Error::new("GitHub auth token must be configured".to_string()))?,
     };
 
-    let crab = octocrab::OctocrabBuilder::default()
-        .personal_token(github_auth_token.clone())
-        .build()
-        .context(String::from("Creating GH client"))?;
+    let crab = {
+        let connector = HttpsConnector::new();
+        let client =
+            hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+                .build(connector);
 
-    let mut headers = header::HeaderMap::new();
-    headers.insert(
-        header::ACCEPT,
-        "application/json"
-            .parse()
-            .expect("Shouldn't have issues parsing literal"),
-    );
-    headers.insert(
-        header::USER_AGENT,
-        format!("spr/{}", env!("CARGO_PKG_VERSION"))
-            .try_into()
-            .expect("Shouldn't have issues parsing literal"),
-    );
-    headers.insert(
-        header::AUTHORIZATION,
-        format!("Bearer {}", github_auth_token).parse()?,
-    );
+        let mut hmap: Vec<(HeaderName, HeaderValue)> = vec![];
+
+        // Add the user agent header required by GitHub
+        hmap.push((USER_AGENT, HeaderValue::from_str("octocrab").unwrap()));
+
+        let auth_header = Some(
+            format!("Bearer {}", github_auth_token.clone())
+                .parse()
+                .unwrap(),
+        );
+        let base_uri = Uri::from_str(GITHUB_BASE_URI).unwrap();
+        let upload_uri = Uri::from_str(GITHUB_BASE_UPLOAD_URI).unwrap();
+
+        let client = ExtraHeadersLayer::new(Arc::new(hmap)).layer(client);
+        let client = BaseUriLayer::new(base_uri.clone()).layer(client);
+        let client = AuthHeaderLayer::new(auth_header, base_uri, upload_uri).layer(client);
+        let client = tower_http::trace::TraceLayer::new_for_http()
+            .make_span_with(|_request: &Request<_>| tracing::debug_span!("http-request"))
+            .on_request(|request: &Request<_>, _span: &Span| {
+                println!(
+                    "started {} {} ({:?})",
+                    request.method(),
+                    request.uri().path(),
+                    request.headers()
+                );
+            })
+            .on_response(|_response: &Response<_>, latency: Duration, _span: &Span| {
+                println!("response generated in {:?}", latency)
+            })
+            .on_body_chunk(|chunk: &Bytes, _latency: Duration, _span: &Span| {
+                println!("receiving {} bytes", chunk.len());
+                hexdump::hexdump(chunk);
+            })
+            .on_eos(
+                |_trailers: Option<&HeaderMap>, stream_duration: Duration, _span: &Span| {
+                    println!("stream closed after {:?}", stream_duration)
+                },
+            )
+            .on_failure(
+                |_error: ServerErrorsFailureClass, _latency: Duration, _span: &Span| {
+                    println!("something went wrong")
+                },
+            )
+            .layer(client);
+        fn request_map_fun<B>(request: Request<B>) -> Request<DebugBody<B>>
+        where
+            B: http_body::Body + Clone,
+        {
+            let (parts, body) = request.into_parts();
+
+            Request::from_parts(parts, DebugBody::new(body))
+        }
+        let client = tower::util::MapRequestLayer::new(request_map_fun).layer(client);
+
+        octocrab::OctocrabBuilder::new_empty()
+            .with_service(client)
+            .with_auth(AuthState::None)
+            .build()
+            .unwrap()
+    };
 
     let config = config::from_jj(&jj, async || {
         let user = crab

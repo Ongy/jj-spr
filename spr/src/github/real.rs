@@ -171,38 +171,6 @@ impl super::GitHubAdapter for &mut GitHub {
         }
     }
 
-    async fn pull_requests<I>(
-        &mut self,
-        numbers: I,
-    ) -> crate::error::Result<Vec<Option<Self::PRAdapter>>>
-    where
-        I: IntoIterator<Item = Option<u64>>,
-    {
-        let pull_requests: Vec<_> = numbers
-            .into_iter()
-            .map(|number| {
-                let mut gh = self.clone();
-                tokio::spawn(async move {
-                    match number {
-                        Some(number) => {
-                            let mut r = &mut gh;
-                            let pr = r.pull_request(number).await;
-                            pr.map(|v| Some(v))
-                        }
-                        None => Ok(None),
-                    }
-                })
-            })
-            .collect();
-
-        let mut ret = Vec::new();
-        for pr in pull_requests {
-            ret.push(pr.await??);
-        }
-
-        Ok(ret)
-    }
-
     async fn new_pull_request<H, B, St, Sb>(
         &mut self,
         title: St,
