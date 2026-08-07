@@ -105,10 +105,12 @@ impl super::GitHubAdapter for &mut GitHub {
             number: number as i64,
         };
 
+        println!("Sending query: {:?}", OldComments::build_query(variables.clone()));
         let resp: graphql_client::Response<old_comments::ResponseData> = self
             .crab
             .graphql(&OldComments::build_query(variables))
             .await?;
+        println!("Got response: {resp:?}");
         if let Some(errs) = resp.errors
             && !errs.is_empty()
         {
