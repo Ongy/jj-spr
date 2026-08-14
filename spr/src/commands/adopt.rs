@@ -96,6 +96,14 @@ where
     PR: crate::github::GHPullRequest,
     GH: crate::github::GitHubAdapter<PRAdapter = PR>,
 {
+    // Early exit if the target PR is already present locally
+    if let Ok(existing_rev) = find_commit_for_pr(jj, config, opts.pull_request) {
+        if !opts.no_checkout {
+            jj.edit(&RevSet::from(&existing_rev.id))?;
+        }
+        return Ok(());
+    }
+
     let mut pr_chain = Vec::new();
     let pr = gh.pull_request(opts.pull_request).await?;
 
@@ -117,6 +125,9 @@ where
     }
 
     for (pr, parent) in pr_chain.into_iter().rev() {
+        if find_commit_for_pr(jj, config, pr.pr_number()).is_ok() {
+            continue;
+        }
         let sections = MessageSectionsMap::from([
             (MessageSection::Title, pr.title().into()),
             (MessageSection::Summary, pr.body().into()),
@@ -126,6 +137,12 @@ where
             ),
         ]);
         do_adopt(jj, config, &sections, pr.head_branch_name(), parent)?;
+    }
+
+    if !opts.no_checkout {
+        if let Ok(target_rev) = find_commit_for_pr(jj, config, opts.pull_request) {
+            jj.edit(&RevSet::from(&target_rev.id))?;
+        }
     }
 
     Ok(())
@@ -395,6 +412,81 @@ mod tests {
         assert_eq!(
             stacked_tree, stacked_base_tree,
             "Adopted revision should have the same tree as upstream branch"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_adopt_idempotent() {
+        let (pr_nr, other_nr) = (1, 3);
+        let (_temp_dir, mut jj, _) = testing::setup::repo_with_origin();
+        let commit_oid =
+            testing::git::add_commit_and_push_to_remote(&jj.git_repo, "spr/test/test-branch");
+        let _stacked_oid = testing::git::add_commit_on_and_push_to_remote(
+            &jj.git_repo,
+            "spr/test/other-branch",
+            [commit_oid],
+        );
+
+        let gh = crate::github::fakes::GitHub {
+            pull_requests: std::collections::BTreeMap::from([
+                (
+                    pr_nr,
+                    crate::github::fakes::PullRequest::new(
+                        "main",
+                        "spr/test/test-branch",
+                        pr_nr,
+                        "My Title",
+                        "",
+                    ),
+                ),
+                (
+                    other_nr,
+                    crate::github::fakes::PullRequest::new(
+                        "spr/test/test-branch",
+                        "spr/test/other-branch",
+                        other_nr,
+                        "My Title",
+                        "",
+                    ),
+                ),
+            ]),
+        };
+
+        // First adoption
+        super::adopt(
+            AdoptOptions {
+                pull_request: other_nr,
+                no_checkout: true,
+            },
+            &mut jj,
+            &mut gh.clone(),
+            &testing::config::basic(),
+        )
+        .await
+        .expect("first adopt should not fail");
+
+        let stacked_rev_1 = super::find_commit_for_pr(&jj, &testing::config::basic(), other_nr)
+            .expect("Failed to find revision for stacked PR");
+
+        // Second adoption of the same PR (should be idempotent no-op)
+        super::adopt(
+            AdoptOptions {
+                pull_request: other_nr,
+                no_checkout: true,
+            },
+            &mut jj,
+            &mut gh.clone(),
+            &testing::config::basic(),
+        )
+        .await
+        .expect("second adopt should not fail");
+
+        let stacked_rev_2 = super::find_commit_for_pr(&jj, &testing::config::basic(), other_nr)
+            .expect("Failed to find revision for stacked PR after second adopt");
+
+        assert_eq!(
+            stacked_rev_1.id, stacked_rev_2.id,
+            "Re-adopting an existing PR must not duplicate changes"
         );
     }
 }

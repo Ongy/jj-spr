@@ -459,7 +459,7 @@ impl Jujutsu {
             .context(String::from("Create new for derived commit"))?;
 
         let change = self
-            .revset_to_change_id(&RevSet::from_arg("at_operation(@-, ..).."))
+            .revset_to_change_id(&RevSet::from_arg("heads(at_operation(@-, ..)..)"))
             .context(String::from("Read change_id from last operation"))?;
 
         self.restore(
@@ -856,6 +856,11 @@ impl Jujutsu {
         ])?;
 
         Ok(output.trim() == "true")
+    }
+
+    pub fn edit(&mut self, revset: &RevSet) -> Result<()> {
+        self.run_captured_with_args(["edit", revset.as_ref()])
+            .map(|_| {})
     }
 
     pub fn fix(&mut self, source: &RevSet) -> Result<()> {
